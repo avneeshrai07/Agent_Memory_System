@@ -14,15 +14,25 @@ import pytz
 from typing import List
 
 
-
+from MEMORY_SYSTEM.DATABASE.CONNECT.connect import db_manager
+from MEMORY_SYSTEM.EXTRACTOR.LAYER_2_Postgres.create_layer_2_tables import ensure_layer_2_table_exists
 from model import bedrock_llm
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-
+    try:
+        await ensure_layer_2_table_exists()
+    except Exception as e:
+        raise
 
     yield 
+
+
+    try:
+        print("Completed")
+    except Exception as e:
+        raise
 
 
 
@@ -60,10 +70,11 @@ def home():
 async def newsreports(request: Request):
     try:
         data = await request.json()
+        user_id = data.get("user_id",None)
         system_prompt = data.get("system_prompt",None)
-        user_prompt = data.get("user_prompt", None)
+        user_prompt = data.get("user_prompt", None)  
         context = None
-        result = await bedrock_llm(system_prompt,user_prompt, context)
+        result = await bedrock_llm(user_id, system_prompt,user_prompt, context)
         return result
     except Exception as e:
         tb = traceback.format_exc()
