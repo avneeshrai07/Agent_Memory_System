@@ -1,0 +1,6 @@
+langchain_core
+langchain_aws
+dotenv
+fastapi
+uvicorn
+pytz
