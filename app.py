@@ -16,6 +16,7 @@ from typing import List
 
 from MEMORY_SYSTEM.DATABASE.CONNECT.connect import db_manager
 from MEMORY_SYSTEM.EXTRACTOR.LAYER_2_Postgres.create_layer_2_tables import ensure_layer_2_table_exists
+from MEMORY_SYSTEM.EXTRACTOR.LAYER_3_pattern.create_layer_3_tables import ensure_layer_3_table_exists
 from model import bedrock_llm
 
 
@@ -23,6 +24,7 @@ from model import bedrock_llm
 async def lifespan(app: FastAPI):
     try:
         await ensure_layer_2_table_exists()
+        await ensure_layer_3_table_exists()
     except Exception as e:
         raise
 

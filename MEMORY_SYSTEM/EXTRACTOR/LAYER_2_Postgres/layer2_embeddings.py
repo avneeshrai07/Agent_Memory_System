@@ -22,6 +22,7 @@ async def create_embeddings(pool, user_id: str, facts: List[Dict]):
         
         async with conn.transaction():
             for fact, embedding in zip(facts, embeddings):
+                print("fact:    ",fact)
                 result = await insert_memories(conn, user_id, fact, embedding.tolist())
                 inserted_ids.append(result["id"])
     
