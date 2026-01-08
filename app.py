@@ -14,14 +14,14 @@ import pytz
 from typing import List
 
 
-from MEMORY_SYSTEM.database.schema.user_persona import ensure_user_peronsa_table_exists
+from MEMORY_SYSTEM.database.schema.user_persona import ensure_user_persona_table_exists
 from MEMORY_SYSTEM.database.schema.pattern_logs import ensure_pattern_logs_table_exists
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        await ensure_user_peronsa_table_exists()
+        await ensure_user_persona_table_exists()
         await ensure_pattern_logs_table_exists()
     except Exception as e:
         raise

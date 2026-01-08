@@ -4,20 +4,43 @@ from typing import Dict, Any
 from MEMORY_SYSTEM.cognition.cognition_model import CognitionModel
 
 # ---------------------------------------------------------------------
-# Field classification
+# Field classification (SEMANTIC, NOT STRUCTURAL)
 # ---------------------------------------------------------------------
 
+# Low-risk, high-volatility fields
 STYLE_FIELDS = {
     "tone",
-    "writing_style",
-    "content_format",
-    "language",
-    "constraints",
+    "voice",
+    "style",
+    "length_preference",
+    "preferred_format",
+    "complexity",
 }
 
+# Stable but identity-defining
 IDENTITY_FIELDS = {
-    "objective",
-    "audience",
+    "job_title",
+    "seniority",
+    "function",
+    "decision_authority",
+}
+
+# Organizational context (slow changing, high impact)
+ORGANIZATION_FIELDS = {
+    "company_name",
+    "industry",
+    "company_size",
+    "company_stage",
+    "business_model",
+    "sales_motion",
+    "target_customers",
+    "products",
+    "tech_orientation",
+}
+
+# Hard constraints (must be explicit)
+CONSTRAINT_FIELDS = {
+    "constraints",
 }
 
 # ---------------------------------------------------------------------
@@ -30,62 +53,101 @@ async def decide(
 ) -> Dict[str, Any]:
     """
     Produce a CognitionDecision for a single signal.
-    No side effects. Pure policy.
+
+    Guarantees:
+    - No side effects
+    - No inference
+    - One signal → one decision
     """
 
     try:
         field = signal.get("field")
-        source = signal.get("source", "derived")
+        category = signal.get("category")
         frequency = int(signal.get("frequency", 1))
         base_confidence = float(signal.get("base_confidence", 0.0))
 
         # -------------------------------------------------
-        # Volatility penalty (decays with frequency)
+        # Volatility penalty (decays with reinforcement)
         # -------------------------------------------------
         volatility_penalty = cognition_model.get_volatility_penalty(field)
         effective_volatility = volatility_penalty / max(frequency, 1)
         final_confidence = max(base_confidence - effective_volatility, 0.0)
 
         # -------------------------------------------------
-        # RULE 1: STYLE preferences → commit by default
+        # RULE 1: STYLE / PREFERENCE → easy partial commit
         # -------------------------------------------------
         if (
-            field in STYLE_FIELDS
-            and final_confidence >= 0.65
+            category == "preference"
+            and field in STYLE_FIELDS
+            and final_confidence >= cognition_model.style_commit_threshold
         ):
             return {
                 "action": "PARTIAL_COMMIT",
                 "target": "persona",
                 "scope": [field],
                 "confidence": round(final_confidence, 2),
-                "reason": "stylistic preference assumed persistent",
+                "reason": "stylistic preference with sufficient confidence",
             }
 
         # -------------------------------------------------
-        # RULE 2: IDENTITY preferences → require reinforcement
+        # RULE 2: IDENTITY → require reinforcement
         # -------------------------------------------------
         if (
-            field in IDENTITY_FIELDS
+            category == "identity"
+            and field in IDENTITY_FIELDS
             and frequency >= cognition_model.implicit_confirmation_required
-            and final_confidence >= cognition_model.explicit_commit_threshold
+            and final_confidence >= cognition_model.identity_commit_threshold
         ):
             return {
                 "action": "PARTIAL_COMMIT",
                 "target": "persona",
                 "scope": [field],
                 "confidence": round(final_confidence, 2),
-                "reason": "reinforced identity preference",
+                "reason": "reinforced identity signal",
             }
 
         # -------------------------------------------------
-        # RULE 3: Default → defer
+        # RULE 3: ORGANIZATION → very conservative
+        # -------------------------------------------------
+        if (
+            category == "organization"
+            and field in ORGANIZATION_FIELDS
+            and frequency >= cognition_model.organization_confirmation_required
+            and final_confidence >= cognition_model.organization_commit_threshold
+        ):
+            return {
+                "action": "PARTIAL_COMMIT",
+                "target": "persona",
+                "scope": [field],
+                "confidence": round(final_confidence, 2),
+                "reason": "stable organizational context confirmed",
+            }
+
+        # -------------------------------------------------
+        # RULE 4: CONSTRAINTS → explicit only
+        # -------------------------------------------------
+        if (
+            category == "constraint"
+            and field in CONSTRAINT_FIELDS
+            and final_confidence >= cognition_model.constraint_commit_threshold
+        ):
+            return {
+                "action": "PARTIAL_COMMIT",
+                "target": "persona",
+                "scope": [field],
+                "confidence": round(final_confidence, 2),
+                "reason": "explicit constraint accepted",
+            }
+
+        # -------------------------------------------------
+        # RULE 5: Default → defer
         # -------------------------------------------------
         return {
             "action": "DEFER",
             "target": "pattern_log",
             "scope": [field],
             "confidence": round(final_confidence, 2),
-            "reason": "not enough confidence",
+            "reason": "insufficient confidence or reinforcement",
         }
 
     except Exception as e:

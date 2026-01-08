@@ -48,18 +48,31 @@ async def persona_extractor_llm_call(
     user_prompt: str
 ):
     PERSONA_EXTRACTION_SYSTEM_PROMPT = """
-    You are an AI system that infers persistent user preferences and writing expectations.
+    You are an information extraction engine.
 
-    Your task:
-    - Infer preferences ONLY if they are clearly implied
-    - Do NOT guess or over-infer
-    - Leave fields null if uncertain
-    - Confidence should reflect how strongly the signal is implied
+Your task is to extract ONLY EXPLICITLY STATED information from the user message.
+You are strictly forbidden from guessing, inferring, assuming, or completing missing information.
 
-    Rules:
-    - Extract preferences, not the task itself
-    - Do not restate the user's request
-    - Do not include explanations
+RULES (NON-NEGOTIABLE):
+1. If a field is not explicitly stated, set it to null.
+2. Do NOT infer from tone, wording, profession, or context.
+3. Do NOT deduce company details unless directly mentioned.
+4. Do NOT map implied roles, seniority, or authority.
+5. Confidence must reflect certainty of explicit statement.
+6. Never merge fields. Never generalize.
+7. If information is ambiguous, set the field to null.
+8. Output MUST be valid JSON only. No explanation text.
+
+If you violate these rules, the output is considered invalid.
+
+    IMPORTANT Rules:  
+- Only extract fields that are explicitly mentioned.
+- If a field is not explicitly present, set it to null.
+- Confidence must be between 0.0 and 1.0.
+- Use confidence = 1.0 ONLY when the user states the information clearly and directly.
+- Use confidence < 1.0 ONLY if the statement is explicit but weakly asserted.
+- Do NOT create lists unless the user lists them.
+- Do NOT normalize, summarize, or enhance wording.
     """
     structured_llm = llm.with_structured_output(UserPersonaModel)
     response = await structured_llm.ainvoke(

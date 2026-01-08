@@ -3,8 +3,8 @@ Persona Context Builder (JSONB-Aligned)
 ======================================
 
 Purpose:
-- Load user persona from database
-- Convert persona blocks into system-prompt shaping text
+- Load user context from database
+- Convert stored blocks into system-prompt shaping text
 - READ-ONLY
 - No LLM calls
 - No DB writes
@@ -12,10 +12,11 @@ Purpose:
 Design Rules:
 - Omit unknown fields
 - Never expose confidence
-- Never mention 'persona' or 'profile'
+- Never mention internal models or storage
 - Stable, reusable guidance only
 """
 
+import json
 from MEMORY_SYSTEM.database.connect.connect import db_manager
 
 
@@ -23,10 +24,9 @@ from MEMORY_SYSTEM.database.connect.connect import db_manager
 # DB LOAD
 # -------------------------------------------------------------------
 
-import json
-
 async def load_user_persona(user_id: str) -> dict | None:
     pool = await db_manager.wait_for_connection_pool_pool()
+
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -34,7 +34,7 @@ async def load_user_persona(user_id: str) -> dict | None:
             FROM agentic_memory_schema.user_persona
             WHERE user_id = $1
             """,
-            user_id
+            user_id,
         )
 
         if not row:
@@ -44,6 +44,11 @@ async def load_user_persona(user_id: str) -> dict | None:
 
         # Explicit JSONB decoding
         for key in [
+            "user_identity",
+            "company_profile",
+            "company_business",
+            "company_products",
+            "company_brand",
             "objective",
             "content_format",
             "audience",
@@ -59,8 +64,74 @@ async def load_user_persona(user_id: str) -> dict | None:
 
 
 # -------------------------------------------------------------------
-# CONTEXT BUILDERS (JSONB BLOCK-AWARE)
+# CONTEXT BUILDERS (BLOCK-AWARE, CONFIDENCE-FREE)
 # -------------------------------------------------------------------
+
+def _identity_context(block: dict | None) -> str | None:
+    if not block:
+        return None
+
+    parts = []
+
+    if block.get("job_title"):
+        parts.append(f"The user’s role is {block['job_title']}.")
+
+    if block.get("function"):
+        parts.append(f"They work in the {block['function']} function.")
+
+    if block.get("seniority"):
+        parts.append(f"They operate at a {block['seniority'].replace('_', ' ')} level.")
+
+    if block.get("decision_authority"):
+        parts.append(
+            f"They act primarily as a {block['decision_authority'].replace('_', ' ')}."
+        )
+
+    return " ".join(parts) if parts else None
+
+
+def _company_context(
+    profile: dict | None,
+    business: dict | None,
+    products: dict | None,
+    brand: dict | None,
+) -> str | None:
+    parts = []
+
+    if profile:
+        if profile.get("company_name"):
+            parts.append(f"The user is associated with {profile['company_name']}.")
+
+        if profile.get("industry"):
+            parts.append(f"The company operates in the {profile['industry']} industry.")
+
+        if profile.get("company_size"):
+            parts.append(f"The organization size is {profile['company_size']}.")
+
+    if business:
+        if business.get("business_model"):
+            parts.append(f"The business follows a {business['business_model']} model.")
+
+        if business.get("target_customers"):
+            joined = ", ".join(business["target_customers"])
+            parts.append(f"The primary customers are {joined}.")
+
+    if products:
+        if products.get("products"):
+            names = [
+                p.get("name") for p in products["products"] if p.get("name")
+            ]
+            if names:
+                parts.append(f"Key products include: {', '.join(names)}.")
+
+    if brand:
+        if brand.get("brand_personality"):
+            parts.append(
+                f"The brand positioning can be described as {brand['brand_personality']}."
+            )
+
+    return " ".join(parts) if parts else None
+
 
 def _objective_context(block: dict | None) -> str | None:
     if not block:
@@ -129,14 +200,18 @@ def _tone_context(block: dict | None, style_block: dict | None) -> str | None:
             parts.append(f"Use {block['voice'].replace('_', ' ')} voice.")
 
         if block.get("emotional_intensity"):
-            parts.append(f"The emotional intensity should be {block['emotional_intensity']}.")
+            parts.append(
+                f"The emotional intensity should be {block['emotional_intensity']}."
+            )
 
     if style_block:
         if style_block.get("style"):
             parts.append(f"Adopt a {style_block['style']} writing style.")
 
         if style_block.get("sentence_structure"):
-            parts.append(f"Prefer {style_block['sentence_structure']} sentences.")
+            parts.append(
+                f"Prefer {style_block['sentence_structure']} sentences."
+            )
 
     return " ".join(parts) if parts else None
 
@@ -185,8 +260,15 @@ async def build_persona_context(user_id: str) -> str:
 
     if not row:
         return ""
-    print("database_row:    ", row)
+
     sections = [
+        _identity_context(row.get("user_identity")),
+        _company_context(
+            row.get("company_profile"),
+            row.get("company_business"),
+            row.get("company_products"),
+            row.get("company_brand"),
+        ),
         _objective_context(row.get("objective")),
         _format_context(row.get("content_format")),
         _audience_context(row.get("audience")),
@@ -200,11 +282,7 @@ async def build_persona_context(user_id: str) -> str:
     if not context_lines:
         return ""
 
-    final_context = (
+    return (
         "USER CONTEXT:\n"
         + "\n".join(f"- {line}" for line in context_lines)
     )
-
-    print("[persona_context_builder] persona context built")
-
-    return final_context

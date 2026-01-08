@@ -8,10 +8,10 @@ Guarantees:
 - No field-level lossy merges
 - Schema matches UserPersonaModel exactly
 """
+
 import json
 from datetime import datetime
 from typing import Optional
-from datetime import datetime
 
 from MEMORY_SYSTEM.persona.persona_schema import UserPersonaModel
 from MEMORY_SYSTEM.database.connect.connect import db_manager
@@ -20,16 +20,20 @@ CONFIDENCE_OVERRIDE_THRESHOLD = 0.80
 
 
 # -------------------------------------------------------------------
-# BLOCK-LEVEL MERGE LOGIC (CORRECT)
+# BLOCK-LEVEL MERGE LOGIC (ATOMIC & SAFE)
 # -------------------------------------------------------------------
 
 def choose_block(
     db_block: Optional[dict],
     incoming_block: Optional[dict],
-    incoming_confidence: float
+    incoming_confidence: float,
 ) -> Optional[dict]:
     """
     Decide whether to overwrite a persona block.
+
+    Rules:
+    - None never overwrites existing data
+    - New data replaces old only if confidence ≥ threshold
     """
     if incoming_block is None:
         return db_block
@@ -49,119 +53,196 @@ def choose_block(
 
 async def update_user_persona(
     user_id: str,
-    incoming_persona: UserPersonaModel
+    incoming_persona: UserPersonaModel,
 ) -> None:
+    """
+    Merge incoming persona into stored persona using block-level logic.
+    """
 
-    print("[persona_merger] starting update for user:", user_id)
+    pool = await db_manager.get_pool()
 
-    pool = await db_manager.wait_for_connection_pool_pool()
     async with pool.acquire() as conn:
-
         row = await conn.fetchrow(
             """
             SELECT *
             FROM agentic_memory_schema.user_persona
             WHERE user_id = $1
             """,
-            user_id
+            user_id,
         )
 
         db = dict(row) if row else {}
 
-        # -----------------------------
-        # BLOCK-LEVEL MERGES
-        # -----------------------------
+        # =====================================================
+        # IDENTITY
+        # =====================================================
+        user_identity = choose_block(
+            db.get("user_identity"),
+            incoming_persona.user_identity.model_dump()
+            if incoming_persona.user_identity else None,
+            incoming_persona.user_identity.confidence
+            if incoming_persona.user_identity else 0.0,
+        )
 
+        # =====================================================
+        # COMPANY CONTEXT
+        # =====================================================
+        company_profile = choose_block(
+            db.get("company_profile"),
+            incoming_persona.company_profile.model_dump()
+            if incoming_persona.company_profile else None,
+            incoming_persona.company_profile.confidence
+            if incoming_persona.company_profile else 0.0,
+        )
+
+        company_business = choose_block(
+            db.get("company_business"),
+            incoming_persona.company_business.model_dump()
+            if incoming_persona.company_business else None,
+            incoming_persona.company_business.confidence
+            if incoming_persona.company_business else 0.0,
+        )
+
+        company_products = choose_block(
+            db.get("company_products"),
+            incoming_persona.company_products.model_dump()
+            if incoming_persona.company_products else None,
+            incoming_persona.company_products.confidence
+            if incoming_persona.company_products else 0.0,
+        )
+
+        company_brand = choose_block(
+            db.get("company_brand"),
+            incoming_persona.company_brand.model_dump()
+            if incoming_persona.company_brand else None,
+            incoming_persona.company_brand.confidence
+            if incoming_persona.company_brand else 0.0,
+        )
+
+        # =====================================================
+        # BEHAVIORAL / CONTENT
+        # =====================================================
         objective = choose_block(
             db.get("objective"),
-            incoming_persona.objective.model_dump() if incoming_persona.objective else None,
-            incoming_persona.objective.confidence if incoming_persona.objective else 0.0
+            incoming_persona.objective.model_dump()
+            if incoming_persona.objective else None,
+            incoming_persona.objective.confidence
+            if incoming_persona.objective else 0.0,
         )
 
         content_format = choose_block(
             db.get("content_format"),
-            incoming_persona.content_format.model_dump() if incoming_persona.content_format else None,
-            incoming_persona.content_format.confidence if incoming_persona.content_format else 0.0
+            incoming_persona.content_format.model_dump()
+            if incoming_persona.content_format else None,
+            incoming_persona.content_format.confidence
+            if incoming_persona.content_format else 0.0,
         )
 
         audience = choose_block(
             db.get("audience"),
-            incoming_persona.audience.model_dump() if incoming_persona.audience else None,
-            incoming_persona.audience.confidence if incoming_persona.audience else 0.0
+            incoming_persona.audience.model_dump()
+            if incoming_persona.audience else None,
+            incoming_persona.audience.confidence
+            if incoming_persona.audience else 0.0,
         )
 
         tone = choose_block(
             db.get("tone"),
-            incoming_persona.tone.model_dump() if incoming_persona.tone else None,
-            incoming_persona.tone.confidence if incoming_persona.tone else 0.0
+            incoming_persona.tone.model_dump()
+            if incoming_persona.tone else None,
+            incoming_persona.tone.confidence
+            if incoming_persona.tone else 0.0,
         )
 
         writing_style = choose_block(
             db.get("writing_style"),
-            incoming_persona.writing_style.model_dump() if incoming_persona.writing_style else None,
-            incoming_persona.writing_style.confidence if incoming_persona.writing_style else 0.0
+            incoming_persona.writing_style.model_dump()
+            if incoming_persona.writing_style else None,
+            incoming_persona.writing_style.confidence
+            if incoming_persona.writing_style else 0.0,
         )
 
         language = choose_block(
             db.get("language"),
-            incoming_persona.language.model_dump() if incoming_persona.language else None,
-            incoming_persona.language.confidence if incoming_persona.language else 0.0
+            incoming_persona.language.model_dump()
+            if incoming_persona.language else None,
+            incoming_persona.language.confidence
+            if incoming_persona.language else 0.0,
         )
 
         constraints = choose_block(
             db.get("constraints"),
-            incoming_persona.constraints.model_dump() if incoming_persona.constraints else None,
-            incoming_persona.constraints.confidence if incoming_persona.constraints else 0.0
+            incoming_persona.constraints.model_dump()
+            if incoming_persona.constraints else None,
+            incoming_persona.constraints.confidence
+            if incoming_persona.constraints else 0.0,
         )
 
-        # -----------------------------
-        # UPSERT (JSONB SAFE)
-        # -----------------------------
-
+        # =====================================================
+        # UPSERT (JSONB SAFE, FULL SCHEMA)
+        # =====================================================
         await conn.execute(
-    """
-    INSERT INTO agentic_memory_schema.user_persona (
-        user_id,
-        objective,
-        content_format,
-        audience,
-        tone,
-        writing_style,
-        language,
-        constraints,
-        last_updated
-    )
-    VALUES (
-        $1,
-        $2::jsonb,
-        $3::jsonb,
-        $4::jsonb,
-        $5::jsonb,
-        $6::jsonb,
-        $7::jsonb,
-        $8::jsonb,
-        $9
-    )
-    ON CONFLICT (user_id)
-    DO UPDATE SET
-        objective = EXCLUDED.objective,
-        content_format = EXCLUDED.content_format,
-        audience = EXCLUDED.audience,
-        tone = EXCLUDED.tone,
-        writing_style = EXCLUDED.writing_style,
-        language = EXCLUDED.language,
-        constraints = EXCLUDED.constraints,
-        last_updated = EXCLUDED.last_updated
-    """,
-    user_id,
-    json.dumps(objective) if objective else None,
-    json.dumps(content_format) if content_format else None,
-    json.dumps(audience) if audience else None,
-    json.dumps(tone) if tone else None,
-    json.dumps(writing_style) if writing_style else None,
-    json.dumps(language) if language else None,
-    json.dumps(constraints) if constraints else None,
-    datetime.utcnow(),
-)
-
-        print("[persona_merger] persona updated successfully")
+            """
+            INSERT INTO agentic_memory_schema.user_persona (
+                user_id,
+                user_identity,
+                company_profile,
+                company_business,
+                company_products,
+                company_brand,
+                objective,
+                content_format,
+                audience,
+                tone,
+                writing_style,
+                language,
+                constraints,
+                last_updated
+            )
+            VALUES (
+                $1,
+                $2::jsonb,
+                $3::jsonb,
+                $4::jsonb,
+                $5::jsonb,
+                $6::jsonb,
+                $7::jsonb,
+                $8::jsonb,
+                $9::jsonb,
+                $10::jsonb,
+                $11::jsonb,
+                $12::jsonb,
+                $13::jsonb,
+                $14
+            )
+            ON CONFLICT (user_id)
+            DO UPDATE SET
+                user_identity = EXCLUDED.user_identity,
+                company_profile = EXCLUDED.company_profile,
+                company_business = EXCLUDED.company_business,
+                company_products = EXCLUDED.company_products,
+                company_brand = EXCLUDED.company_brand,
+                objective = EXCLUDED.objective,
+                content_format = EXCLUDED.content_format,
+                audience = EXCLUDED.audience,
+                tone = EXCLUDED.tone,
+                writing_style = EXCLUDED.writing_style,
+                language = EXCLUDED.language,
+                constraints = EXCLUDED.constraints,
+                last_updated = EXCLUDED.last_updated
+            """,
+            user_id,
+            json.dumps(user_identity) if user_identity else None,
+            json.dumps(company_profile) if company_profile else None,
+            json.dumps(company_business) if company_business else None,
+            json.dumps(company_products) if company_products else None,
+            json.dumps(company_brand) if company_brand else None,
+            json.dumps(objective) if objective else None,
+            json.dumps(content_format) if content_format else None,
+            json.dumps(audience) if audience else None,
+            json.dumps(tone) if tone else None,
+            json.dumps(writing_style) if writing_style else None,
+            json.dumps(language) if language else None,
+            json.dumps(constraints) if constraints else None,
+            datetime.utcnow(),
+        )
