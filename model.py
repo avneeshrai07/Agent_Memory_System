@@ -5,15 +5,7 @@ import traceback
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_aws import ChatBedrock
 import json
-from MEMORY_SYSTEM.DATABASE.CONNECT.connect import db_manager
-# from MEMORY_SYSTEM.EXTRACTOR.LAYER_1_llm.llm_extractor_prompt import extract_facts_from_conversation
-# from MEMORY_SYSTEM.EXTRACTOR.LAYER_2_Postgres.layer2_embeddings import create_embeddings
-# from MEMORY_SYSTEM.EXTRACTOR.LAYER_3_pattern.detect_patterns import detect_all_patterns
-# from MEMORY_SYSTEM.EXTRACTOR.LAYER_3_pattern.PATTERN.persona_detector import detect_user_persona
-from MEMORY_SYSTEM.EXTRACTOR.LAYER_3_pattern.load_patterns import load_all_user_patterns
-from MEMORY_SYSTEM.main import process_conversation_memory
 
-from MEMORY_SYSTEM.main import build_context_with_persona
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 BEDROCK_API_KEY = os.getenv("BEDROCK_API_KEY")
@@ -27,12 +19,6 @@ llm = ChatBedrock(
     aws_access_key_id=AWS_ACCESS_KEY_ID,
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY
 )
-
-# Async function equivalent to Vertex AI version
-# Async function equivalent to Vertex AI version
-# In your model.py or wherever bedrock_llm is defined
-
-from MEMORY_SYSTEM.EXTRACTOR.LAYER_3_pattern.context_builder import build_smart_context, build_compact_context
 
 
 async def bedrock_llm(user_id: str, system_role: str, prompt: str, context: str):
@@ -61,11 +47,11 @@ async def bedrock_llm(user_id: str, system_role: str, prompt: str, context: str)
         # ====================================================================
         
 
+        print(f"📝 [SMART CONTEXT]\n{smart_context}\n")
 
         # User message (DON'T dump raw patterns, use smart context instead)
         user_message = f"{prompt}\n\nsome contex about user {smart_context}  \n\n Additional context: {context}"
         
-        print(f"📝 [SMART CONTEXT]\n{smart_context}\n")
         print(f"user_message: {user_message}")
         
         # ====================================================================

@@ -26,7 +26,7 @@ def load_aws_secrets(secret_name="prod/orbit", region_name="us-east-2"):
         os.environ[key] = value
         print(f"{key} = {value}")  # Debug print
 
-# if __name__ == "__main__":
-#     print("🔑 Fetching AWS Secrets...\n")
-#     load_aws_secrets()
-#     print("\n✅ All secrets loaded and printed successfully!")
+if __name__ == "__main__":
+    print("🔑 Fetching AWS Secrets...\n")
+    load_aws_secrets()
+    print("\n✅ All secrets loaded and printed successfully!")
