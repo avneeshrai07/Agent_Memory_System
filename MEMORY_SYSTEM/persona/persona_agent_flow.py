@@ -33,9 +33,14 @@ from langchain_aws import ChatBedrock
 
 from MEMORY_SYSTEM.persona.persona_schema import UserPersonaModel
 from MEMORY_SYSTEM.persona.persona_context_builder import build_persona_context
-from MEMORY_SYSTEM.persona.persona_extractor import PersonaExtractor
+from MEMORY_SYSTEM.persona.persona_extractor import persona_extractor_llm_call
 from MEMORY_SYSTEM.persona.persona_merger import update_user_persona
-
+from MEMORY_SYSTEM.persona.persona_adapters import (
+    persona_to_signals,
+    project_persona_by_decisions,
+)
+from MEMORY_SYSTEM.cognition.cognition_updater import run_cognition
+from MEMORY_SYSTEM.cognition.signal_frequency import enrich_signal_frequency
 
 # -------------------------------------------------------------------
 # ENV + LLM INITIALIZATION
@@ -128,25 +133,83 @@ async def build_user_persona_system_prompt(
 # ------------------------------------------------------
 async def learn_persona_from_interaction(
     user_id: str,
-    user_prompt: str,
-    llm
+    user_prompt: str
 ):
+    """
+    End-to-end persona learning with cognition gatekeeping.
+    """
+
     try:
         print("\n================ PERSONA LEARNER FLOW START ================\n")
-        persona_extractor = PersonaExtractor(llm)
 
-        extracted_persona = await persona_extractor.extract(user_prompt)
+        # ------------------------------------------------------
+        # 1. EXTRACT PERSONA (PROPOSAL ONLY)
+        # ------------------------------------------------------
+
+        
+        extracted_persona = await persona_extractor_llm_call(user_prompt)
+
+        print("extracted_persona:   ",extracted_persona)
 
         if extracted_persona is None:
+            print("[persona_learning] no persona extracted")
             return
+
+        # ------------------------------------------------------
+        # 2. CONVERT PERSONA → COGNITION SIGNALS
+        # ------------------------------------------------------
+
+        signals = persona_to_signals(extracted_persona)
+
+        print("signals1:   ",signals)
+
+        if not signals:
+            print("[persona_learning] no signals generated")
+            return
+        
+        signals = await enrich_signal_frequency(signals)
+
+        print("signals2:   ",signals)
+
+        if not signals:
+            print("[persona_learning] no signals generated")
+            return
+
+        # ------------------------------------------------------
+        # 3. RUN COGNITION (DECISION AUTHORITY)
+        # ------------------------------------------------------
+
+        decisions = await run_cognition(signals)
+
+        print("decisions:   ",decisions)
+
+        # ------------------------------------------------------
+        # 4. PROJECT PERSONA BASED ON DECISIONS
+        # ------------------------------------------------------
+
+        filtered_persona = project_persona_by_decisions(
+            extracted_persona,
+            decisions,
+        )
+
+        print("filtered_persona:   ",filtered_persona)
+
+        if filtered_persona is None:
+            print("[persona_learning] cognition blocked persona update")
+            return
+
+        # ------------------------------------------------------
+        # 5. UPDATE PERSONA (UNCHANGED MERGER)
+        # ------------------------------------------------------
 
         await update_user_persona(
             user_id=user_id,
-            incoming_persona=extracted_persona
+            incoming_persona=filtered_persona,
         )
 
-        print("[persona_learning] persona updated")
-        print("\n================ PERSONA LEARNER FLOW START ================\n")
+        print("[persona_learning] persona updated via cognition")
+        print("\n================ PERSONA LEARNER FLOW END ================\n")
+
     except Exception:
         print("[persona_learning] ERROR")
         print(traceback.format_exc())

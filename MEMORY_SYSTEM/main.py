@@ -18,6 +18,7 @@ load_dotenv()
 
 from MEMORY_SYSTEM.context.build_cognition_context import build_epistemic_system_prompt
 from MEMORY_SYSTEM.persona.persona_agent_flow import build_user_persona_system_prompt
+from MEMORY_SYSTEM.persona.persona_agent_flow import learn_persona_from_interaction
 import traceback
 from langchain_aws import ChatBedrock
 
@@ -25,6 +26,22 @@ AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY") 
 AWS_MODEL_REGION = 'ap-southeast-2' 
 LLM_MODEL_NEWS_FETCHER = "amazon.nova-lite-v1:0"
+
+
+import asyncio
+from typing import Set
+
+BACKGROUND_TASKS: Set[asyncio.Task] = set()
+
+
+def register_task(task: asyncio.Task) -> None:
+    BACKGROUND_TASKS.add(task)
+
+    def _cleanup(t: asyncio.Task):
+        BACKGROUND_TASKS.discard(t)
+
+    task.add_done_callback(_cleanup)
+
 
 # -------------------------------------------------------------------
 #  # BEDROCK INITIALIZATION 
@@ -67,13 +84,29 @@ async def bedrock_llm_call(
                 {"role": "user", "content": user_prompt}
             ]
         )
+        # --------------------------------------------------
+        # BACKGROUND PERSONA LEARNING (NON-BLOCKING)
+        # --------------------------------------------------
+        task = asyncio.create_task(
+            learn_persona_from_interaction(
+                user_id,
+                user_prompt
+            ),
+            name=f"process_memory:{user_id}",
+        )
+
+        register_task(task)
+
 
         if response is None:
             return {"error": "bedrock returned null response"}
 
         agent_response = response.model_dump()
         print("agent_response:  ",agent_response)
-        return agent_response['content']
+        await asyncio.sleep(30)
+        # return agent_response['content']
+        print("agent_response_type", agent_response)
+        return agent_response
 
     except Exception as e:
         return {
@@ -89,9 +122,21 @@ async def bedrock_llm_call(
 
 if __name__ == "__main__":
     user_id="test_user_002"
-    system_prmopt = "You are an assistant"
+    system_prmopt = """
+    You are a professional AI writing assistant.
+Your task is to respond clearly, accurately, and helpfully.
+Do not assume the user’s preferences unless they are explicitly stated.
+Adapt your response only based on the user’s instructions in this conversation.
+"""
+
     user_prompt="""
-Tell me anthing about me.
+This is an explicit preference, not a one-time request.
+
+Always write in a professional, analytical tone.
+Keep responses short and structured in paragraphs.
+Avoid casual language completely.
+
+This is for executive stakeholders in a SaaS context.
 """
     asyncio.run(
         bedrock_llm_call(

@@ -12,87 +12,66 @@ Purpose:
 This file is intentionally simple.
 """
 
+
+from dotenv import load_dotenv
+load_dotenv()
 from typing import Optional
 import traceback
-
+import os
 from langchain_aws import ChatBedrock
 
 from MEMORY_SYSTEM.persona.persona_schema import UserPersonaModel
 
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID") 
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY") 
+AWS_MODEL_REGION = 'ap-southeast-2' 
+LLM_MODEL_NEWS_FETCHER = "amazon.nova-lite-v1:0"
+
+# -------------------------------------------------------------------
+#  # BEDROCK INITIALIZATION 
+# -------------------------------------------------------------------
+
+llm = ChatBedrock( 
+    model_id=LLM_MODEL_NEWS_FETCHER, 
+    region_name=AWS_MODEL_REGION, 
+    temperature=0.1, 
+    max_tokens=9999, 
+    aws_access_key_id=AWS_ACCESS_KEY_ID, 
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY 
+)
 
 # -------------------------------------------------------------------
 # SYSTEM PROMPT (PERSONA INFERENCE ONLY)
 # -------------------------------------------------------------------
 
-PERSONA_EXTRACTION_SYSTEM_PROMPT = """
-You are an AI system that infers persistent user preferences and writing expectations.
+async def persona_extractor_llm_call(
+    user_prompt: str
+):
+    PERSONA_EXTRACTION_SYSTEM_PROMPT = """
+    You are an AI system that infers persistent user preferences and writing expectations.
 
-Your task:
-- Infer preferences ONLY if they are clearly implied
-- Do NOT guess or over-infer
-- Leave fields null if uncertain
-- Confidence should reflect how strongly the signal is implied
+    Your task:
+    - Infer preferences ONLY if they are clearly implied
+    - Do NOT guess or over-infer
+    - Leave fields null if uncertain
+    - Confidence should reflect how strongly the signal is implied
 
-Rules:
-- Extract preferences, not the task itself
-- Do not restate the user's request
-- Do not include explanations
-"""
-
-
-# -------------------------------------------------------------------
-# PERSONA EXTRACTOR
-# -------------------------------------------------------------------
-
-class PersonaExtractor:
+    Rules:
+    - Extract preferences, not the task itself
+    - Do not restate the user's request
+    - Do not include explanations
     """
-    Persona extractor using Bedrock structured output.
-    """
+    structured_llm = llm.with_structured_output(UserPersonaModel)
+    response = await structured_llm.ainvoke(
+        [
+            {"role": "system", "content": PERSONA_EXTRACTION_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt}
+        ]
+    )
+    if response is None:
+        return {"error": "bedrock returned null response"}
 
-    def __init__(self, llm: ChatBedrock):
-        self.llm = llm
+    print("agent_response_type", response)
+    return response
 
-    async def extract(
-        self,
-        user_prompt: str
-    ) -> Optional[UserPersonaModel]:
-        """
-        Extract persona from a single user interaction.
 
-        Returns:
-            UserPersonaModel or None
-        """
-
-        print("[persona_extractor] starting extraction")
-
-        try:
-            structured_llm = self.llm.with_structured_output(UserPersonaModel)
-
-            persona = await structured_llm.ainvoke(
-                [
-                    {"role": "system", "content": PERSONA_EXTRACTION_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ]
-            )
-
-            if persona is None:
-                print("[persona_extractor] no persona returned")
-                return None
-
-            # Defensive: check if at least one field is populated
-            if not any(
-                getattr(persona, field) is not None
-                for field in persona.model_fields
-            ):
-                print("[persona_extractor] persona empty, skipping")
-                return None
-
-            print("[persona_extractor] persona extracted successfully")
-            print(persona.model_dump())
-
-            return persona
-
-        except Exception:
-            print("[persona_extractor] extraction failed")
-            print(traceback.format_exc())
-            return None
