@@ -9,7 +9,7 @@ from MEMORY_SYSTEM.database.insert.log_pattern_decision import log_pattern_decis
 
 
 async def run_cognition(
-    signal_candidates: List[Dict[str, Any]],
+    user_id, signal_candidates: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
 
     decisions: List[Dict[str, Any]] = []
@@ -26,10 +26,7 @@ async def run_cognition(
             decisions.append(decision)
 
             # 🔒 SAFE FIRST CONSUMER: pattern log
-            await log_pattern_decision(
-                signal=signal,
-                decision=decision,
-            )
+            await log_pattern_decision(user_id, signal, decision)
 
         except Exception:
             # Cognition must continue even if logging fails

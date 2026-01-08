@@ -131,6 +131,8 @@ async def build_user_persona_system_prompt(
 # ------------------------------------------------------
 # 3. EXTRACT PERSONA FROM INTERACTION
 # ------------------------------------------------------
+# persona/persona_agent_flow.py
+
 async def learn_persona_from_interaction(
     user_id: str,
     user_prompt: str
@@ -142,66 +144,41 @@ async def learn_persona_from_interaction(
     try:
         print("\n================ PERSONA LEARNER FLOW START ================\n")
 
-        # ------------------------------------------------------
-        # 1. EXTRACT PERSONA (PROPOSAL ONLY)
-        # ------------------------------------------------------
-
-        
         extracted_persona = await persona_extractor_llm_call(user_prompt)
-
-        print("extracted_persona:   ",extracted_persona)
+        print("extracted_persona:   ", extracted_persona)
 
         if extracted_persona is None:
-            print("[persona_learning] no persona extracted")
             return
 
-        # ------------------------------------------------------
-        # 2. CONVERT PERSONA → COGNITION SIGNALS
-        # ------------------------------------------------------
-
+        # 1. Proposal
         signals = persona_to_signals(extracted_persona)
-
-        print("signals1:   ",signals)
-
         if not signals:
-            print("[persona_learning] no signals generated")
-            return
-        
-        signals = await enrich_signal_frequency(signals)
-
-        print("signals2:   ",signals)
-
-        if not signals:
-            print("[persona_learning] no signals generated")
             return
 
-        # ------------------------------------------------------
-        # 3. RUN COGNITION (DECISION AUTHORITY)
-        # ------------------------------------------------------
+        # 2. Evidence enrichment (user-scoped)
+        signals = await enrich_signal_frequency(user_id, signals)
+        print("signals_Evidence:    ", signals)
 
-        decisions = await run_cognition(signals)
+        if not signals:
+            return
 
-        print("decisions:   ",decisions)
+        # 3. Cognition
+        decisions = await run_cognition(user_id, signals)
+        print("decisions:   ", decisions)
 
-        # ------------------------------------------------------
-        # 4. PROJECT PERSONA BASED ON DECISIONS
-        # ------------------------------------------------------
-
+        # 4. Projection
         filtered_persona = project_persona_by_decisions(
             extracted_persona,
             decisions,
         )
 
-        print("filtered_persona:   ",filtered_persona)
+        print("filtered_persona:   ", filtered_persona)
 
         if filtered_persona is None:
             print("[persona_learning] cognition blocked persona update")
             return
 
-        # ------------------------------------------------------
-        # 5. UPDATE PERSONA (UNCHANGED MERGER)
-        # ------------------------------------------------------
-
+        # 5. Update persona
         await update_user_persona(
             user_id=user_id,
             incoming_persona=filtered_persona,
@@ -213,9 +190,3 @@ async def learn_persona_from_interaction(
     except Exception:
         print("[persona_learning] ERROR")
         print(traceback.format_exc())
-
-
-
-# -------------------------------------------------------------------
-# MANUAL TEST ENTRY POINT
-# -------------------------------------------------------------------

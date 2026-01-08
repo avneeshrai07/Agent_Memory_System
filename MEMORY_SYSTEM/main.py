@@ -121,22 +121,16 @@ async def bedrock_llm_call(
 # -------------------------------------------------------------------
 
 if __name__ == "__main__":
-    user_id="test_user_002"
+    user_id="test_user_004"
     system_prmopt = """
     You are a professional AI writing assistant.
-Your task is to respond clearly, accurately, and helpfully.
-Do not assume the user’s preferences unless they are explicitly stated.
-Adapt your response only based on the user’s instructions in this conversation.
 """
 
-    user_prompt="""
-This is an explicit preference, not a one-time request.
-
-Always write in a professional, analytical tone.
-Keep responses short and structured in paragraphs.
-Avoid casual language completely.
-
-This is for executive stakeholders in a SaaS context.
+#     user_prompt="""
+# Can you write me an email on prefabs design write in a professional, analytical tone. Keep responses short and structured in paragraphs. Avoid casual language completely.
+# """
+    user_prompt = """
+can you tell me how I like my tone?
 """
     asyncio.run(
         bedrock_llm_call(

@@ -1,5 +1,4 @@
-from MEMORY_SYSTEM.persona.persona_schema import UserPersonaModel
-
+# persona/persona_adapters.py
 
 from MEMORY_SYSTEM.persona.persona_schema import UserPersonaModel
 
@@ -7,7 +6,6 @@ from MEMORY_SYSTEM.persona.persona_schema import UserPersonaModel
 def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
     """
     Convert structured persona blocks into cognition signal candidates.
-    This function DISTILLS rich blocks into scalar cognition signals.
     """
 
     signals: list[dict] = []
@@ -25,7 +23,7 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
         })
 
     # -----------------------------
-    # OBJECTIVE
+    # OBJECTIVE (IDENTITY)
     # -----------------------------
     if extracted_persona.objective:
         add_signal(
@@ -36,7 +34,7 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
         )
 
     # -----------------------------
-    # CONTENT FORMAT
+    # CONTENT FORMAT (STYLE)
     # -----------------------------
     if extracted_persona.content_format:
         add_signal(
@@ -47,7 +45,7 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
         )
 
     # -----------------------------
-    # AUDIENCE
+    # AUDIENCE (IDENTITY)
     # -----------------------------
     if extracted_persona.audience:
         add_signal(
@@ -58,7 +56,7 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
         )
 
     # -----------------------------
-    # TONE
+    # TONE (STYLE)
     # -----------------------------
     if extracted_persona.tone:
         add_signal(
@@ -69,7 +67,7 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
         )
 
     # -----------------------------
-    # WRITING STYLE
+    # WRITING STYLE (STYLE)
     # -----------------------------
     if extracted_persona.writing_style:
         add_signal(
@@ -80,7 +78,7 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
         )
 
     # -----------------------------
-    # LANGUAGE
+    # LANGUAGE (STYLE)
     # -----------------------------
     if extracted_persona.language:
         add_signal(
@@ -91,7 +89,7 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
         )
 
     # -----------------------------
-    # CONSTRAINTS (OPTIONAL)
+    # CONSTRAINTS (STYLE)
     # -----------------------------
     if extracted_persona.constraints:
         add_signal(
@@ -110,7 +108,6 @@ def project_persona_by_decisions(
 ) -> UserPersonaModel | None:
     """
     Project a partial persona based on cognition decisions.
-    Adapter layer: Cognition → Persona.
     """
 
     allowed_fields: set[str] = set()

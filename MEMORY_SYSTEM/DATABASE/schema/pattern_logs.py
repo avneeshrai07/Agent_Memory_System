@@ -22,9 +22,12 @@ async def ensure_pattern_logs_table_exists():
                 CREATE TABLE IF NOT EXISTS agentic_memory_schema.pattern_logs (
                 id BIGSERIAL PRIMARY KEY,
 
+                -- ownership (MANDATORY)
+                user_id TEXT NOT NULL,
+
                 -- signal info
                 signal_category TEXT NOT NULL,
-                signal_field TEXT,
+                signal_field TEXT NOT NULL,
 
                 -- cognition decision
                 action TEXT NOT NULL,
