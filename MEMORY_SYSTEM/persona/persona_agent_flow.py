@@ -80,17 +80,16 @@ async def call_llm(system_prompt: str, user_prompt: str) -> str:
 # MAIN ORCHESTRATION
 # -------------------------------------------------------------------
 
-async def run_persona_agent_flow(
+async def build_user_persona_system_prompt(
     user_id: str,
-    user_prompt: str
-):
+    system_prompt: str
+) -> str:
     """
-    Full persona-aware agent execution.
+    Build and return a persona-aware system prompt.
     """
 
-    print("\n================ PERSONA AGENT FLOW START ================\n")
+    print("\n================ PERSONA CREATION FLOW START ================\n")
     print("[flow] user_id:", user_id)
-    print("[flow] user_prompt:", user_prompt)
 
     try:
         # ------------------------------------------------------
@@ -105,59 +104,17 @@ async def run_persona_agent_flow(
         else:
             print("\n[flow] no persona context found")
 
-        system_prompt = f"""
-You are a helpful, professional AI assistant.
+        personalised_system_prompt = f"""
+        {system_prompt}
 
-{persona_context}
-""".strip()
+        The following describes the user's writing preferences and communication constraints:
+        {persona_context}
+                """.strip()
 
-        # ------------------------------------------------------
-        # 2. CALL LLM FOR RESPONSE
-        # ------------------------------------------------------
+        print("\n================ PERSONA CREATION FLOW END ================\n")
 
-        print("\n[flow] calling LLM for response...\n")
-
-        agent_response = await call_llm(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt
-        )
-
-        print("\n================ AGENT RESPONSE ================\n")
-        print(agent_response)
-
-        # ------------------------------------------------------
-        # 3. EXTRACT PERSONA FROM INTERACTION
-        # ------------------------------------------------------
-
-        print("\n[flow] extracting persona from interaction...")
-
-        persona_extractor = PersonaExtractor(llm)
-
-        extracted_persona = await persona_extractor.extract(user_prompt)
-
-        if extracted_persona is None:
-            print("[flow] no persona signals extracted")
-            return agent_response
-
-        print("\n[flow] extracted persona:")
-        print(extracted_persona.model_dump())
-
-        # ------------------------------------------------------
-        # 4. UPDATE PERSONA IN DB
-        # ------------------------------------------------------
-
-        print("\n[flow] updating persona in database...")
-
-        await update_user_persona(
-            user_id=user_id,
-            incoming_persona=extracted_persona
-        )
-
-        print("\n[flow] persona update completed")
-
-        print("\n================ PERSONA AGENT FLOW END ================\n")
-
-        return agent_response
+        # ✅ RETURN HERE — NOTHING ELSE
+        return personalised_system_prompt
 
     except Exception:
         print("\n[flow] ERROR OCCURRED")
@@ -165,18 +122,37 @@ You are a helpful, professional AI assistant.
         raise
 
 
+
+# ------------------------------------------------------
+# 3. EXTRACT PERSONA FROM INTERACTION
+# ------------------------------------------------------
+async def learn_persona_from_interaction(
+    user_id: str,
+    user_prompt: str,
+    llm
+):
+    try:
+        print("\n================ PERSONA LEARNER FLOW START ================\n")
+        persona_extractor = PersonaExtractor(llm)
+
+        extracted_persona = await persona_extractor.extract(user_prompt)
+
+        if extracted_persona is None:
+            return
+
+        await update_user_persona(
+            user_id=user_id,
+            incoming_persona=extracted_persona
+        )
+
+        print("[persona_learning] persona updated")
+        print("\n================ PERSONA LEARNER FLOW START ================\n")
+    except Exception:
+        print("[persona_learning] ERROR")
+        print(traceback.format_exc())
+
+
+
 # -------------------------------------------------------------------
 # MANUAL TEST ENTRY POINT
 # -------------------------------------------------------------------
-
-if __name__ == "__main__":
-    asyncio.run(
-        run_persona_agent_flow(
-            user_id="test_user_001",
-            user_prompt="""
-I need to write a concise, professional email for senior executives.
-Focus on ROI and business impact.
-This is for a SaaS product launch.
-"""
-        )
-    )

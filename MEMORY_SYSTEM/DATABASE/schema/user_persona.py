@@ -22,32 +22,18 @@ async def ensure_user_peronsa_table_exists():
                 CREATE TABLE IF NOT EXISTS agentic_memory_schema.user_persona (
                     user_id TEXT PRIMARY KEY,
 
-                    objective TEXT,
-                    desired_action TEXT,
-                    success_criteria TEXT,
-
-                    content_types TEXT[],
-                    preferred_format TEXT,
-                    length_preference TEXT,
-
-                    audience_type TEXT,
-                    audience_domain TEXT,
-                    audience_level TEXT,
-
-                    tone TEXT,
-                    voice TEXT,
-                    style TEXT,
-
-                    language TEXT,
-                    complexity TEXT,
-                    jargon_policy TEXT,
-
+                    objective JSONB,
+                    content_format JSONB,
+                    audience JSONB,
+                    tone JSONB,
+                    writing_style JSONB,
+                    language JSONB,
                     constraints JSONB,
 
-                    confidence REAL DEFAULT 0.5,
                     last_updated TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
+            print(f" Database initialization complete")
     except Exception as e:
         print(f"❌ Database initialization failed: {e}")
         raise
