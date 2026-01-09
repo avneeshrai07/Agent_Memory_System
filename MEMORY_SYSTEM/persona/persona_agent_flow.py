@@ -25,6 +25,8 @@ if PROJECT_ROOT not in sys.path:
 import os
 import asyncio
 import traceback
+import traceback
+from typing import Dict, Any
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -133,60 +135,34 @@ async def build_user_persona_system_prompt(
 # ------------------------------------------------------
 # persona/persona_agent_flow.py
 
-async def learn_persona_from_interaction(
-    user_id: str,
-    user_prompt: str
-):
-    """
-    End-to-end persona learning with cognition gatekeeping.
-    """
+async def learn_persona_from_interaction(user_id: str, user_prompt: str):
+    print(">>> ENTER learn_persona_from_interaction", flush=True)
 
     try:
-        print("\n================ PERSONA LEARNER FLOW START ================\n")
-
         extracted_persona = await persona_extractor_llm_call(user_prompt)
-        print("extracted_persona:   ", extracted_persona)
+        print("extracted_persona:", extracted_persona, flush=True)
 
-        if extracted_persona is None:
-            return
-
-        # 1. Proposal
         signals = persona_to_signals(extracted_persona)
-        if not signals:
-            return
+        # print("signals_Evidence:", signals, flush=True)
 
-        # 2. Evidence enrichment (user-scoped)
         signals = await enrich_signal_frequency(user_id, signals)
-        print("signals_Evidence:    ", signals)
+        print("signals (enriched):", signals, flush=True)
 
-        if not signals:
-            return
-
-        # 3. Cognition
+        print(">>> ABOUT TO RUN COGNITION", flush=True)
         decisions = await run_cognition(user_id, signals)
-        print("decisions:   ", decisions)
+        print("decisions:", decisions, flush=True)
 
-        # 4. Projection
-        filtered_persona = project_persona_by_decisions(
-            extracted_persona,
-            decisions,
-        )
+        filtered_persona = project_persona_by_decisions(extracted_persona, decisions)
+        print("filtered_persona:", filtered_persona, flush=True)
 
-        print("filtered_persona:   ", filtered_persona)
+        if filtered_persona:
+            print(">>> ABOUT TO UPDATE DB", flush=True)
+            await update_user_persona(user_id, filtered_persona)
+            print(">>> DB UPDATED", flush=True)
+        else:
+            print(">>> NOTHING TO PERSIST", flush=True)
 
-        if filtered_persona is None:
-            print("[persona_learning] cognition blocked persona update")
-            return
+    except Exception as e:
+        print("❌ persona learner crashed:", e, flush=True)
 
-        # 5. Update persona
-        await update_user_persona(
-            user_id=user_id,
-            incoming_persona=filtered_persona,
-        )
-
-        print("[persona_learning] persona updated via cognition")
-        print("\n================ PERSONA LEARNER FLOW END ================\n")
-
-    except Exception:
-        print("[persona_learning] ERROR")
-        print(traceback.format_exc())
+    print("<<< EXIT learn_persona_from_interaction", flush=True)

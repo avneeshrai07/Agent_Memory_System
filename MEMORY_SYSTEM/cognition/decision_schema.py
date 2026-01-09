@@ -5,6 +5,7 @@ from typing import List, Optional, Literal, Dict, Any
 ActionType = Literal[
     "COMMIT",
     "PARTIAL_COMMIT",
+    "PROVISIONAL_COMMIT",
     "DEFER",
     "REJECT",
 ]

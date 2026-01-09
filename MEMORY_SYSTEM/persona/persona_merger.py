@@ -20,6 +20,43 @@ CONFIDENCE_OVERRIDE_THRESHOLD = 0.80
 
 
 # -------------------------------------------------------------------
+# SAFETY HELPERS (CRITICAL)
+# -------------------------------------------------------------------
+
+def normalize_db_block(value: Optional[object]) -> Optional[dict]:
+    """
+    Normalize JSONB values coming from Postgres.
+    asyncpg may return dict OR str depending on state.
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        return json.loads(value)
+    return None
+
+
+def safe_confidence(block) -> float:
+    """
+    Confidence must NEVER be None.
+    """
+    if block is None:
+        return 0.0
+    value = getattr(block, "confidence", 0.0)
+    return float(value) if value is not None else 0.0
+
+
+def jsonb_or_none(block: Optional[dict]) -> Optional[str]:
+    """
+    Prevent empty objects from overwriting stored data.
+    """
+    if not block:
+        return None
+    return json.dumps(block)
+
+
+# -------------------------------------------------------------------
 # BLOCK-LEVEL MERGE LOGIC (ATOMIC & SAFE)
 # -------------------------------------------------------------------
 
@@ -33,9 +70,13 @@ def choose_block(
 
     Rules:
     - None never overwrites existing data
+    - Empty dict never overwrites existing data
     - New data replaces old only if confidence ≥ threshold
     """
     if incoming_block is None:
+        return db_block
+
+    if not incoming_block:
         return db_block
 
     if db_block is None:
@@ -73,6 +114,23 @@ async def update_user_persona(
 
         db = dict(row) if row else {}
 
+        # Normalize all JSONB blocks from DB
+        for key in [
+            "user_identity",
+            "company_profile",
+            "company_business",
+            "company_products",
+            "company_brand",
+            "objective",
+            "content_format",
+            "audience",
+            "tone",
+            "writing_style",
+            "language",
+            "constraints",
+        ]:
+            db[key] = normalize_db_block(db.get(key))
+
         # =====================================================
         # IDENTITY
         # =====================================================
@@ -80,8 +138,7 @@ async def update_user_persona(
             db.get("user_identity"),
             incoming_persona.user_identity.model_dump()
             if incoming_persona.user_identity else None,
-            incoming_persona.user_identity.confidence
-            if incoming_persona.user_identity else 0.0,
+            safe_confidence(incoming_persona.user_identity),
         )
 
         # =====================================================
@@ -91,32 +148,28 @@ async def update_user_persona(
             db.get("company_profile"),
             incoming_persona.company_profile.model_dump()
             if incoming_persona.company_profile else None,
-            incoming_persona.company_profile.confidence
-            if incoming_persona.company_profile else 0.0,
+            safe_confidence(incoming_persona.company_profile),
         )
 
         company_business = choose_block(
             db.get("company_business"),
             incoming_persona.company_business.model_dump()
             if incoming_persona.company_business else None,
-            incoming_persona.company_business.confidence
-            if incoming_persona.company_business else 0.0,
+            safe_confidence(incoming_persona.company_business),
         )
 
         company_products = choose_block(
             db.get("company_products"),
             incoming_persona.company_products.model_dump()
             if incoming_persona.company_products else None,
-            incoming_persona.company_products.confidence
-            if incoming_persona.company_products else 0.0,
+            safe_confidence(incoming_persona.company_products),
         )
 
         company_brand = choose_block(
             db.get("company_brand"),
             incoming_persona.company_brand.model_dump()
             if incoming_persona.company_brand else None,
-            incoming_persona.company_brand.confidence
-            if incoming_persona.company_brand else 0.0,
+            safe_confidence(incoming_persona.company_brand),
         )
 
         # =====================================================
@@ -126,60 +179,53 @@ async def update_user_persona(
             db.get("objective"),
             incoming_persona.objective.model_dump()
             if incoming_persona.objective else None,
-            incoming_persona.objective.confidence
-            if incoming_persona.objective else 0.0,
+            safe_confidence(incoming_persona.objective),
         )
 
         content_format = choose_block(
             db.get("content_format"),
             incoming_persona.content_format.model_dump()
             if incoming_persona.content_format else None,
-            incoming_persona.content_format.confidence
-            if incoming_persona.content_format else 0.0,
+            safe_confidence(incoming_persona.content_format),
         )
 
         audience = choose_block(
             db.get("audience"),
             incoming_persona.audience.model_dump()
             if incoming_persona.audience else None,
-            incoming_persona.audience.confidence
-            if incoming_persona.audience else 0.0,
+            safe_confidence(incoming_persona.audience),
         )
 
         tone = choose_block(
             db.get("tone"),
             incoming_persona.tone.model_dump()
             if incoming_persona.tone else None,
-            incoming_persona.tone.confidence
-            if incoming_persona.tone else 0.0,
+            safe_confidence(incoming_persona.tone),
         )
 
         writing_style = choose_block(
             db.get("writing_style"),
             incoming_persona.writing_style.model_dump()
             if incoming_persona.writing_style else None,
-            incoming_persona.writing_style.confidence
-            if incoming_persona.writing_style else 0.0,
+            safe_confidence(incoming_persona.writing_style),
         )
 
         language = choose_block(
             db.get("language"),
             incoming_persona.language.model_dump()
             if incoming_persona.language else None,
-            incoming_persona.language.confidence
-            if incoming_persona.language else 0.0,
+            safe_confidence(incoming_persona.language),
         )
 
         constraints = choose_block(
             db.get("constraints"),
             incoming_persona.constraints.model_dump()
             if incoming_persona.constraints else None,
-            incoming_persona.constraints.confidence
-            if incoming_persona.constraints else 0.0,
+            safe_confidence(incoming_persona.constraints),
         )
 
         # =====================================================
-        # UPSERT (JSONB SAFE, FULL SCHEMA)
+        # UPSERT (JSONB SAFE)
         # =====================================================
         await conn.execute(
             """
@@ -232,17 +278,17 @@ async def update_user_persona(
                 last_updated = EXCLUDED.last_updated
             """,
             user_id,
-            json.dumps(user_identity) if user_identity else None,
-            json.dumps(company_profile) if company_profile else None,
-            json.dumps(company_business) if company_business else None,
-            json.dumps(company_products) if company_products else None,
-            json.dumps(company_brand) if company_brand else None,
-            json.dumps(objective) if objective else None,
-            json.dumps(content_format) if content_format else None,
-            json.dumps(audience) if audience else None,
-            json.dumps(tone) if tone else None,
-            json.dumps(writing_style) if writing_style else None,
-            json.dumps(language) if language else None,
-            json.dumps(constraints) if constraints else None,
+            jsonb_or_none(user_identity),
+            jsonb_or_none(company_profile),
+            jsonb_or_none(company_business),
+            jsonb_or_none(company_products),
+            jsonb_or_none(company_brand),
+            jsonb_or_none(objective),
+            jsonb_or_none(content_format),
+            jsonb_or_none(audience),
+            jsonb_or_none(tone),
+            jsonb_or_none(writing_style),
+            jsonb_or_none(language),
+            jsonb_or_none(constraints),
             datetime.utcnow(),
         )

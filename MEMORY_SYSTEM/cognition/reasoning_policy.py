@@ -88,6 +88,24 @@ async def decide(
                 "confidence": round(final_confidence, 2),
                 "reason": "stylistic preference with sufficient confidence",
             }
+        
+        # -------------------------------------------------
+        # RULE 1.5: PROVISIONAL MEMORY (UX-SAFE ACCEPTANCE)
+        # -------------------------------------------------
+
+        if (
+            category in {"identity", "organization", "preference", "constraint"}
+            and frequency == 1
+            and base_confidence >= 0.95
+        ):
+            return {
+                "action": "PROVISIONAL_COMMIT",
+                "target": "runtime_only",
+                "scope": [field],
+                "confidence": round(final_confidence, 2),
+                "reason": "accepted provisionally for working context",
+            }
+
 
         # -------------------------------------------------
         # RULE 2: IDENTITY → require reinforcement

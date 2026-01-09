@@ -1,5 +1,3 @@
-# cognition/cognition_updater.py
-
 from typing import List, Dict, Any
 
 from MEMORY_SYSTEM.cognition.reasoning_policy import decide
@@ -22,29 +20,36 @@ async def run_cognition(
     - Decision shape is always valid
     """
 
+    print(">>> ENTER run_cognition", flush=True)
+
     decisions: List[Dict[str, Any]] = []
 
     # --------------------------------------------------
     # Load cognition config (fail-safe)
     # --------------------------------------------------
     try:
+        print(">>> ABOUT TO LOAD COGNITION CONFIG", flush=True)
         config = await load_cognition_config()
+        print(">>> COGNITION CONFIG LOADED", config, flush=True)
         cognition_model = CognitionModel(config)
-    except Exception:
-        # Absolute fallback: empty model
+        print(">>> COGNITION MODEL CREATED", flush=True)
+
+    except Exception as e:
+        print("⚠️ cognition config load failed:", repr(e), flush=True)
         cognition_model = CognitionModel({})
 
     # --------------------------------------------------
-    # Run cognition per signal (isolated execution)
+    # Run cognition per signal
     # --------------------------------------------------
     for signal in signal_candidates:
-        # Defensive copy: cognition must not mutate source signals
         safe_signal = dict(signal)
 
         try:
+            # print(">>> CALLING decide()", flush=True)
             decision = await decide(safe_signal, cognition_model)
+            # print(">>> CALLED decide()", flush=True)
 
-            # Enforce decision shape invariants
+            # normalize decision shape
             decision = {
                 "action": decision.get("action", "REJECT"),
                 "target": decision.get("target"),
@@ -55,17 +60,31 @@ async def run_cognition(
 
             decisions.append(decision)
 
-            # --------------------------------------------------
-            # SAFE FIRST CONSUMER: pattern log (non-blocking)
-            # --------------------------------------------------
+            # -----------------------------
+            # Non-blocking pattern log
+            # -----------------------------
             try:
+                # print(">>> CALLING log_pattern_decision()", flush=True)
                 await log_pattern_decision(user_id, safe_signal, decision)
-            except Exception:
-                # Logging failure must NEVER affect cognition
-                pass
+                # print(">>> CALLED log_pattern_decision()", flush=True)
+            except Exception as e:
+                print(
+                    "⚠️ pattern log failed:",
+                    "signal =", safe_signal,
+                    "decision =", decision,
+                    "error =", repr(e),
+                    flush=True,
+                )
 
-        except Exception:
-            # Absolute cognition failure → explicit reject
+        except Exception as e:
+            # Cognition itself failed — MUST be visible
+            print(
+                "❌ cognition decision failed:",
+                "signal =", safe_signal,
+                "error =", repr(e),
+                flush=True,
+            )
+
             decisions.append({
                 "action": "REJECT",
                 "target": None,
@@ -74,4 +93,5 @@ async def run_cognition(
                 "reason": "cognition_execution_failure",
             })
 
+    print(">>> EXIT run_cognition", flush=True)
     return decisions

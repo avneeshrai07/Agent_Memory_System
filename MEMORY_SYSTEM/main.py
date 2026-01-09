@@ -103,7 +103,7 @@ async def bedrock_llm_call(
 
         agent_response = response.model_dump()
         print("agent_response:  ",agent_response)
-        await asyncio.sleep(30)
+        await asyncio.sleep(40)
         # return agent_response['content']
         print("agent_response_type", agent_response)
         return agent_response
@@ -130,47 +130,7 @@ if __name__ == "__main__":
 # Can you write me an email on prefabs design write in a professional, analytical tone. Keep responses short and structured in paragraphs. Avoid casual language completely.
 # """
     user_prompt = """
-cMy name is Harsh Joshi.
-
-I am the Chief Marketing Officer at Orbitaim.
-I work primarily in the marketing function and I am a decision maker for content and go-to-market strategy.
-
-Orbitaim is a technology company.
-The registered name of the company is Orbit AI Marketing Solutions LLP.
-The company operates in the Technology industry.
-We are a startup with around 11–50 employees.
-Our headquarters is in Sector-142, Noida.
-Our website is https://orbit.orbitaim.io.
-
-Orbitaim follows a B2B SaaS business model.
-Our primary customers are startups and small to medium-sized businesses.
-Our flagship product is called Orbit, which is a software product.
-
-For content creation:
-- The primary goal is to persuade.
-- The desired reader action is to book a demo.
-- Success is measured by demo bookings.
-
-I usually want content written as emails.
-Use paragraphs, not bullet points.
-Keep the length short.
-
-The target audience is executives in the SaaS domain.
-They are experts.
-
-Maintain a professional tone.
-Use third person voice.
-The emotional intensity should be confident.
-
-Adopt an analytical writing style.
-Prefer short sentences.
-
-Write in English.
-Use a professional level of complexity.
-Jargon is allowed.
-
-Do not exaggerate claims.
-Avoid informal language.
+tell something about me
 """
     asyncio.run(
         bedrock_llm_call(

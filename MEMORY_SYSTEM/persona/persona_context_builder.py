@@ -4,7 +4,7 @@ Persona Context Builder (JSONB-Aligned)
 
 Purpose:
 - Load user context from database
-- Convert stored blocks into system-prompt shaping text
+- Convert stored + provisional blocks into system-prompt shaping text
 - READ-ONLY
 - No LLM calls
 - No DB writes
@@ -17,6 +17,7 @@ Design Rules:
 """
 
 import json
+from copy import deepcopy
 from MEMORY_SYSTEM.database.connect.connect import db_manager
 
 
@@ -63,6 +64,79 @@ async def load_user_persona(user_id: str) -> dict | None:
         return data
 
 
+# -------------------------------------------------------------------
+# PROVISIONAL OVERLAY (BLOCK-AWARE)
+# -------------------------------------------------------------------
+
+def _apply_provisional_overlay(
+    persona: dict,
+    provisional: dict,
+) -> dict:
+    """
+    Overlay provisional fields onto persona blocks.
+    Provisional ALWAYS wins for the session.
+    """
+
+    merged = deepcopy(persona)
+
+    FIELD_TO_BLOCK = {
+        # identity
+        "job_title": ("user_identity", "job_title"),
+        "function": ("user_identity", "function"),
+        "seniority": ("user_identity", "seniority"),
+        "decision_authority": ("user_identity", "decision_authority"),
+
+        # organization
+        "company_name": ("company_profile", "company_name"),
+        "industry": ("company_profile", "industry"),
+        "company_size": ("company_profile", "company_size"),
+        "company_stage": ("company_profile", "company_stage"),
+        "business_model": ("company_business", "business_model"),
+        "target_customers": ("company_business", "target_customers"),
+
+        # objective
+        "primary_goal": ("objective", "primary_goal"),
+        "desired_action": ("objective", "desired_action"),
+        "success_criteria": ("objective", "success_criteria"),
+
+        # content format
+        "preferred_format": ("content_format", "preferred_format"),
+        "length_preference": ("content_format", "length_preference"),
+
+        # audience
+        "audience_type": ("audience", "audience_type"),
+        "audience_domain": ("audience", "audience_domain"),
+        "audience_level": ("audience", "audience_level"),
+
+        # tone / style
+        "tone": ("tone", "tone"),
+        "voice": ("tone", "voice"),
+        "emotional_intensity": ("tone", "emotional_intensity"),
+        "style": ("writing_style", "style"),
+        "sentence_structure": ("writing_style", "sentence_structure"),
+
+        # language
+        "language": ("language", "language"),
+        "complexity": ("language", "complexity"),
+        "jargon_policy": ("language", "jargon_policy"),
+
+        # constraints
+        "constraints": ("constraints", "constraints"),
+    }
+
+    for field, value in provisional.items():
+        mapping = FIELD_TO_BLOCK.get(field)
+        if not mapping:
+            continue
+
+        block_name, block_field = mapping
+
+        if merged.get(block_name) is None:
+            merged[block_name] = {}
+
+        merged[block_name][block_field] = value
+
+    return merged
 # -------------------------------------------------------------------
 # CONTEXT BUILDERS (BLOCK-AWARE, CONFIDENCE-FREE)
 # -------------------------------------------------------------------
@@ -255,26 +329,38 @@ def _constraint_context(block: dict | None) -> str | None:
 # PUBLIC ENTRY POINT
 # -------------------------------------------------------------------
 
-async def build_persona_context(user_id: str) -> str:
-    row = await load_user_persona(user_id)
+async def build_persona_context(
+    user_id: str,
+    provisional_memory: dict | None = None,
+) -> str:
+    """
+    Build runtime persona context.
 
-    if not row:
-        return ""
+    Priority:
+    1. Provisional memory (session-level)
+    2. Persisted persona (long-term)
+    """
+
+    row = await load_user_persona(user_id)
+    persona = row or {}
+
+    if provisional_memory:
+        persona = _apply_provisional_overlay(persona, provisional_memory)
 
     sections = [
-        _identity_context(row.get("user_identity")),
+        _identity_context(persona.get("user_identity")),
         _company_context(
-            row.get("company_profile"),
-            row.get("company_business"),
-            row.get("company_products"),
-            row.get("company_brand"),
+            persona.get("company_profile"),
+            persona.get("company_business"),
+            persona.get("company_products"),
+            persona.get("company_brand"),
         ),
-        _objective_context(row.get("objective")),
-        _format_context(row.get("content_format")),
-        _audience_context(row.get("audience")),
-        _tone_context(row.get("tone"), row.get("writing_style")),
-        _language_context(row.get("language")),
-        _constraint_context(row.get("constraints")),
+        _objective_context(persona.get("objective")),
+        _format_context(persona.get("content_format")),
+        _audience_context(persona.get("audience")),
+        _tone_context(persona.get("tone"), persona.get("writing_style")),
+        _language_context(persona.get("language")),
+        _constraint_context(persona.get("constraints")),
     ]
 
     context_lines = [s for s in sections if s]
