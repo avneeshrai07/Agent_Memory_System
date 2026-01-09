@@ -35,7 +35,8 @@ from langchain_aws import ChatBedrock
 
 from MEMORY_SYSTEM.persona.persona_schema import UserPersonaModel
 from MEMORY_SYSTEM.persona.persona_context_builder import build_persona_context
-from MEMORY_SYSTEM.persona.persona_extractor import persona_extractor_llm_call
+# from MEMORY_SYSTEM.persona.persona_extractor import persona_extractor_llm_call
+from MEMORY_SYSTEM.persona.persona_prompts import persona_extractor_function
 from MEMORY_SYSTEM.persona.persona_merger import update_user_persona
 from MEMORY_SYSTEM.persona.persona_adapters import (
     persona_to_signals,
@@ -139,7 +140,7 @@ async def learn_persona_from_interaction(user_id: str, user_prompt: str):
     print(">>> ENTER learn_persona_from_interaction", flush=True)
 
     try:
-        extracted_persona = await persona_extractor_llm_call(user_prompt)
+        extracted_persona = await persona_extractor_function(user_prompt)
         print("extracted_persona:", extracted_persona, flush=True)
 
         signals = persona_to_signals(extracted_persona)

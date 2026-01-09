@@ -114,13 +114,13 @@ async def bedrock_llm_call(
 # -------------------------------------------------------------------
 
 if __name__ == "__main__":
-    user_id="test_user_004"
+    user_id="test_user_010"
     system_prmopt = """
     You are a professional AI writing assistant.
 """
 
     user_prompt="""
-I want 10 subject lines on enviroment.
+    my name is avneesh i am a lead software developer at orbitaim, write the email again
 """
 #     user_prompt = """
 # write it in bullet points and keep it short
