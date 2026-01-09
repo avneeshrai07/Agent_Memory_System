@@ -12,8 +12,13 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 import pytz
 from typing import List
-
-
+import asyncio
+from MEMORY_SYSTEM.runtime.background_worker import background_worker
+from MEMORY_SYSTEM.database.schema.memories import ensure_memories_table_exists
+from MEMORY_SYSTEM.database.schema.memory_access_log import ensure_memory_access_log_table_exists
+from MEMORY_SYSTEM.database.schema.memory_events import ensure_memory_events_table_exists
+from MEMORY_SYSTEM.database.schema.memory_links import ensure_memory_links_table_exists
+from MEMORY_SYSTEM.database.schema.memory_snapshots import ensure_memory_snapshots_table_exists
 from MEMORY_SYSTEM.database.schema.user_persona import ensure_user_persona_table_exists
 from MEMORY_SYSTEM.database.schema.pattern_logs import ensure_pattern_logs_table_exists
 
@@ -21,8 +26,18 @@ from MEMORY_SYSTEM.database.schema.pattern_logs import ensure_pattern_logs_table
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
+        await ensure_memories_table_exists()
+        await ensure_memory_access_log_table_exists()
+        await ensure_memory_events_table_exists()
+        await ensure_memory_links_table_exists()
+        await ensure_memory_snapshots_table_exists()
         await ensure_user_persona_table_exists()
         await ensure_pattern_logs_table_exists()
+    except Exception as e:
+        raise
+
+    try:
+        asyncio.create_task(background_worker())
     except Exception as e:
         raise
 

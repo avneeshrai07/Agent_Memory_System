@@ -16,6 +16,7 @@ import traceback
 from dotenv import load_dotenv
 load_dotenv()
 
+from MEMORY_SYSTEM.runtime.background_worker import submit_background_task
 from MEMORY_SYSTEM.context.build_cognition_context import build_epistemic_system_prompt
 from MEMORY_SYSTEM.persona.persona_agent_flow import build_user_persona_system_prompt
 from MEMORY_SYSTEM.persona.persona_agent_flow import learn_persona_from_interaction
@@ -87,23 +88,15 @@ async def bedrock_llm_call(
         # --------------------------------------------------
         # BACKGROUND PERSONA LEARNING (NON-BLOCKING)
         # --------------------------------------------------
-        task = asyncio.create_task(
-            learn_persona_from_interaction(
-                user_id,
-                user_prompt
-            ),
-            name=f"process_memory:{user_id}",
+        submit_background_task(
+            await learn_persona_from_interaction(user_id, user_prompt)
         )
-
-        register_task(task)
-
 
         if response is None:
             return {"error": "bedrock returned null response"}
 
         agent_response = response.model_dump()
         # print("agent_response:  ",agent_response)
-        await asyncio.sleep(40)
         print(agent_response.get('content'))
         # print("agent_response_type", agent_response)
         return agent_response
@@ -121,14 +114,14 @@ async def bedrock_llm_call(
 # -------------------------------------------------------------------
 
 if __name__ == "__main__":
-    user_id="test_user_007"
+    user_id="test_user_004"
     system_prmopt = """
     You are a professional AI writing assistant.
 """
 
-#     user_prompt="""
-# can you write a short email for me?
-# """
+    user_prompt="""
+I want 10 subject lines on enviroment.
+"""
 #     user_prompt = """
 # write it in bullet points and keep it short
 # """
@@ -142,9 +135,9 @@ if __name__ == "__main__":
 #     user_prompt = """
 #     keep emails short and in bullet points like before but add more action items
 # """
-    user_prompt = """
-    can you write an email by my name
-"""
+#     user_prompt = """
+#     I am Avneesh rai a software developer at orbitaim, write a blog for me
+# """
     asyncio.run(
         bedrock_llm_call(
             user_id,

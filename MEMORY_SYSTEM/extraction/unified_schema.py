@@ -1,3 +1,7 @@
+from typing import List, Optional
+from pydantic import BaseModel, Field
+
+
 from typing import Optional, List, Literal
 from pydantic import BaseModel, Field
 
@@ -31,7 +35,7 @@ class UserIdentityPersona(BaseModel):
 
     years_experience: Optional[int] = None
 
-    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 # =========================================================
@@ -57,7 +61,7 @@ class CompanyProfilePersona(BaseModel):
 
     website: Optional[str] = None
 
-    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class CompanyBusinessPersona(BaseModel):
@@ -77,7 +81,7 @@ class CompanyBusinessPersona(BaseModel):
 
     core_value_proposition: Optional[str] = None
 
-    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class CompanyProductPersona(BaseModel):
@@ -94,7 +98,7 @@ class CompanyProductPersona(BaseModel):
 
     differentiation_axes: Optional[List[str]] = None
 
-    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class CompanyBrandPersona(BaseModel):
@@ -107,7 +111,7 @@ class CompanyBrandPersona(BaseModel):
     compliance_sensitivity: Optional[bool] = None
     data_security_sensitivity: Optional[bool] = None
 
-    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 # =========================================================
@@ -122,7 +126,7 @@ class ObjectivePersona(BaseModel):
     success_criteria: Optional[str] = None
     horizon: Optional[Literal["short_term", "long_term"]] = None
 
-    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class ContentFormatPersona(BaseModel):
@@ -130,7 +134,7 @@ class ContentFormatPersona(BaseModel):
     preferred_format: Optional[str] = None
     length_preference: Optional[str] = None
 
-    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class AudiencePersona(BaseModel):
@@ -143,7 +147,7 @@ class AudiencePersona(BaseModel):
     ]] = None
     geo_context: Optional[str] = None
 
-    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class TonePersona(BaseModel):
@@ -155,7 +159,7 @@ class TonePersona(BaseModel):
     ]] = None
     emotional_intensity: Optional[str] = None
 
-    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class WritingStylePersona(BaseModel):
@@ -164,7 +168,7 @@ class WritingStylePersona(BaseModel):
     use_examples: Optional[bool] = None
     use_storytelling: Optional[bool] = None
 
-    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class LanguagePersona(BaseModel):
@@ -172,13 +176,13 @@ class LanguagePersona(BaseModel):
     complexity: Optional[str] = None
     jargon_policy: Optional[str] = None
 
-    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class ConstraintPersona(BaseModel):
     constraints: Optional[List[str]] = None
 
-    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 # =========================================================
@@ -213,3 +217,16 @@ class UserPersonaModel(BaseModel):
     writing_style: Optional[WritingStylePersona] = None
     language: Optional[LanguagePersona] = None
     constraints: Optional[ConstraintPersona] = None
+
+
+
+class LTMFact(BaseModel):
+    fact: str
+    memory_type: str
+    semantic_topic: Optional[str] = None
+    confidence_score: float = Field(ge=0.0, le=1.0)
+
+
+class UnifiedExtractionOutput(BaseModel):
+    persona: UserPersonaModel
+    ltm_facts: List[LTMFact]
