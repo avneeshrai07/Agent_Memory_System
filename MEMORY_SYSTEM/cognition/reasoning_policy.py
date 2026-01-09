@@ -3,61 +3,17 @@
 from typing import Dict, Any
 from MEMORY_SYSTEM.cognition.cognition_model import CognitionModel
 
-# ---------------------------------------------------------------------
-# Field classification (SEMANTIC, NOT STRUCTURAL)
-# ---------------------------------------------------------------------
-
-# Low-risk, high-volatility fields
-STYLE_FIELDS = {
-    "tone",
-    "voice",
-    "style",
-    "length_preference",
-    "preferred_format",
-    "complexity",
-}
-
-# Stable but identity-defining
-IDENTITY_FIELDS = {
-    "job_title",
-    "seniority",
-    "function",
-    "decision_authority",
-}
-
-# Organizational context (slow changing, high impact)
-ORGANIZATION_FIELDS = {
-    "company_name",
-    "industry",
-    "company_size",
-    "company_stage",
-    "business_model",
-    "sales_motion",
-    "target_customers",
-    "products",
-    "tech_orientation",
-}
-
-# Hard constraints (must be explicit)
-CONSTRAINT_FIELDS = {
-    "constraints",
-}
-
-# ---------------------------------------------------------------------
-# Core decision function
-# ---------------------------------------------------------------------
 
 async def decide(
     signal: Dict[str, Any],
-    cognition_model: CognitionModel,
 ) -> Dict[str, Any]:
     """
-    Produce a CognitionDecision for a single signal.
+    Block-aligned cognition decision engine.
 
-    Guarantees:
-    - No side effects
-    - No inference
-    - One signal → one decision
+    Rules:
+    - Implicit learning everywhere
+    - Promotion after frequency >= 2 (>=3 for constraints)
+    - Confidence only prevents hallucination
     """
 
     try:
@@ -67,105 +23,131 @@ async def decide(
         base_confidence = float(signal.get("base_confidence", 0.0))
 
         # -------------------------------------------------
-        # Volatility penalty (decays with reinforcement)
+        # GLOBAL SAFETY GATE
         # -------------------------------------------------
-        volatility_penalty = cognition_model.get_volatility_penalty(field)
-        effective_volatility = volatility_penalty / max(frequency, 1)
-        final_confidence = max(base_confidence - effective_volatility, 0.0)
-
-        # -------------------------------------------------
-        # RULE 1: STYLE / PREFERENCE → easy partial commit
-        # -------------------------------------------------
-        if (
-            category == "preference"
-            and field in STYLE_FIELDS
-            and final_confidence >= cognition_model.style_commit_threshold
-        ):
+        if base_confidence < 0.80:
             return {
-                "action": "PARTIAL_COMMIT",
-                "target": "persona",
-                "scope": [field],
-                "confidence": round(final_confidence, 2),
-                "reason": "stylistic preference with sufficient confidence",
+                "action": "REJECT",
+                "target": None,
+                "scope": [],
+                "confidence": 0.0,
+                "reason": "low confidence signal rejected",
             }
-        
-        # -------------------------------------------------
-        # RULE 1.5: PROVISIONAL MEMORY (UX-SAFE ACCEPTANCE)
-        # -------------------------------------------------
 
-        if (
-            category in {"identity", "organization", "preference", "constraint"}
-            and frequency == 1
-            and base_confidence >= 0.95
-        ):
+        # =================================================
+        # 1. USER IDENTITY
+        # =================================================
+        if category == "identity":
+            if frequency >= 2:
+                return {
+                    "action": "PARTIAL_COMMIT",
+                    "target": "persona",
+                    "scope": [field],
+                    "confidence": 0.85,
+                    "reason": "implicit repetition (identity)",
+                }
+
             return {
                 "action": "PROVISIONAL_COMMIT",
                 "target": "runtime_only",
                 "scope": [field],
-                "confidence": round(final_confidence, 2),
-                "reason": "accepted provisionally for working context",
+                "confidence": 0.60,
+                "reason": "provisional identity signal",
             }
 
+        # =================================================
+        # 2. ORGANIZATION / COMPANY
+        # =================================================
+        if category == "organization":
+            if frequency >= 2:
+                return {
+                    "action": "PARTIAL_COMMIT",
+                    "target": "persona",
+                    "scope": [field],
+                    "confidence": 0.85,
+                    "reason": "implicit repetition (organization)",
+                }
 
-        # -------------------------------------------------
-        # RULE 2: IDENTITY → require reinforcement
-        # -------------------------------------------------
-        if (
-            category == "identity"
-            and field in IDENTITY_FIELDS
-            and frequency >= cognition_model.implicit_confirmation_required
-            and final_confidence >= cognition_model.identity_commit_threshold
-        ):
             return {
-                "action": "PARTIAL_COMMIT",
-                "target": "persona",
+                "action": "PROVISIONAL_COMMIT",
+                "target": "runtime_only",
                 "scope": [field],
-                "confidence": round(final_confidence, 2),
-                "reason": "reinforced identity signal",
+                "confidence": 0.60,
+                "reason": "provisional organization context",
             }
 
-        # -------------------------------------------------
-        # RULE 3: ORGANIZATION → very conservative
-        # -------------------------------------------------
-        if (
-            category == "organization"
-            and field in ORGANIZATION_FIELDS
-            and frequency >= cognition_model.organization_confirmation_required
-            and final_confidence >= cognition_model.organization_commit_threshold
-        ):
+        # =================================================
+        # 3. PREFERENCES / STYLE / FORMAT / AUDIENCE
+        # =================================================
+        if category == "preference":
+            if frequency >= 1:
+                return {
+                    "action": "PARTIAL_COMMIT",
+                    "target": "persona",
+                    "scope": [field],
+                    "confidence": 0.85,
+                    "reason": "implicit repetition (preference/style)",
+                }
+
             return {
-                "action": "PARTIAL_COMMIT",
-                "target": "persona",
+                "action": "PROVISIONAL_COMMIT",
+                "target": "runtime_only",
                 "scope": [field],
-                "confidence": round(final_confidence, 2),
-                "reason": "stable organizational context confirmed",
+                "confidence": 0.60,
+                "reason": "provisional preference",
             }
 
-        # -------------------------------------------------
-        # RULE 4: CONSTRAINTS → explicit only
-        # -------------------------------------------------
-        if (
-            category == "constraint"
-            and field in CONSTRAINT_FIELDS
-            and final_confidence >= cognition_model.constraint_commit_threshold
-        ):
+        # =================================================
+        # 4. LANGUAGE
+        # =================================================
+        if category == "language":
+            if frequency >= 1:
+                return {
+                    "action": "PARTIAL_COMMIT",
+                    "target": "persona",
+                    "scope": [field],
+                    "confidence": 0.85,
+                    "reason": "implicit repetition (language)",
+                }
+
             return {
-                "action": "PARTIAL_COMMIT",
-                "target": "persona",
+                "action": "PROVISIONAL_COMMIT",
+                "target": "runtime_only",
                 "scope": [field],
-                "confidence": round(final_confidence, 2),
-                "reason": "explicit constraint accepted",
+                "confidence": 0.60,
+                "reason": "provisional language preference",
             }
 
-        # -------------------------------------------------
-        # RULE 5: Default → defer
-        # -------------------------------------------------
+        # =================================================
+        # 5. CONSTRAINTS
+        # =================================================
+        if category == "constraint":
+            if frequency >= 3:
+                return {
+                    "action": "PARTIAL_COMMIT",
+                    "target": "persona",
+                    "scope": [field],
+                    "confidence": 0.85,
+                    "reason": "repeated constraint accepted",
+                }
+
+            return {
+                "action": "PROVISIONAL_COMMIT",
+                "target": "runtime_only",
+                "scope": [field],
+                "confidence": 0.60,
+                "reason": "provisional constraint",
+            }
+
+        # =================================================
+        # FALLBACK
+        # =================================================
         return {
             "action": "DEFER",
             "target": "pattern_log",
             "scope": [field],
-            "confidence": round(final_confidence, 2),
-            "reason": "insufficient confidence or reinforcement",
+            "confidence": 0.0,
+            "reason": "unclassified signal",
         }
 
     except Exception as e:

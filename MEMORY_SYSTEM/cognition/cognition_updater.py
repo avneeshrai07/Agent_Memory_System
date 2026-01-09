@@ -27,16 +27,16 @@ async def run_cognition(
     # --------------------------------------------------
     # Load cognition config (fail-safe)
     # --------------------------------------------------
-    try:
-        print(">>> ABOUT TO LOAD COGNITION CONFIG", flush=True)
-        config = await load_cognition_config()
-        print(">>> COGNITION CONFIG LOADED", config, flush=True)
-        cognition_model = CognitionModel(config)
-        print(">>> COGNITION MODEL CREATED", flush=True)
+    # try:
+        # print(">>> ABOUT TO LOAD COGNITION CONFIG", flush=True)
+        # config = await load_cognition_config()
+        # print(">>> COGNITION CONFIG LOADED", config, flush=True)
+        # cognition_model = CognitionModel(config)
+        # print(">>> COGNITION MODEL CREATED", flush=True)
 
-    except Exception as e:
-        print("⚠️ cognition config load failed:", repr(e), flush=True)
-        cognition_model = CognitionModel({})
+    # except Exception as e:
+    #     print("⚠️ cognition config load failed:", repr(e), flush=True)
+    #     cognition_model = CognitionModel({})
 
     # --------------------------------------------------
     # Run cognition per signal
@@ -46,7 +46,7 @@ async def run_cognition(
 
         try:
             # print(">>> CALLING decide()", flush=True)
-            decision = await decide(safe_signal, cognition_model)
+            decision = await decide(safe_signal)
             # print(">>> CALLED decide()", flush=True)
 
             # normalize decision shape

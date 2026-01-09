@@ -102,10 +102,10 @@ async def bedrock_llm_call(
             return {"error": "bedrock returned null response"}
 
         agent_response = response.model_dump()
-        print("agent_response:  ",agent_response)
+        # print("agent_response:  ",agent_response)
         await asyncio.sleep(40)
-        # return agent_response['content']
-        print("agent_response_type", agent_response)
+        print(agent_response.get('content'))
+        # print("agent_response_type", agent_response)
         return agent_response
 
     except Exception as e:
@@ -121,16 +121,29 @@ async def bedrock_llm_call(
 # -------------------------------------------------------------------
 
 if __name__ == "__main__":
-    user_id="test_user_004"
+    user_id="test_user_007"
     system_prmopt = """
     You are a professional AI writing assistant.
 """
 
 #     user_prompt="""
-# Can you write me an email on prefabs design write in a professional, analytical tone. Keep responses short and structured in paragraphs. Avoid casual language completely.
+# can you write a short email for me?
+# """
+#     user_prompt = """
+# write it in bullet points and keep it short
+# """
+    # user_prompt = """
+    # i am a lead software developer at orbitaim, write the email again
+    # """
+
+    # user_prompt = """
+    # i am a lead software developer at orbitaim, write the email again
+    # """
+#     user_prompt = """
+#     keep emails short and in bullet points like before but add more action items
 # """
     user_prompt = """
-tell something about me
+    can you write an email by my name
 """
     asyncio.run(
         bedrock_llm_call(
