@@ -129,7 +129,81 @@ async def build_user_persona_system_prompt(
         print(traceback.format_exc())
         raise
 
+def print_signals_with_decisions(signals, decisions, flush=True):
+    print("\n=== SIGNALS + COGNITION DECISIONS ===", flush=flush)
 
+    for idx, (signal, decision) in enumerate(zip(signals, decisions), start=1):
+        print(f"\n[{idx}] {signal.get('category', '').upper()} :: {signal.get('field')}", flush=flush)
+
+        # --- Signal ---
+        print("  SIGNAL", flush=flush)
+        print(f"    value        : {signal.get('value')}", flush=flush)
+        print(f"    base_conf    : {signal.get('base_confidence')}", flush=flush)
+        print(f"    source       : {signal.get('source')}", flush=flush)
+        print(f"    frequency    : {signal.get('frequency')}", flush=flush)
+
+        # --- Decision ---
+        print("  DECISION", flush=flush)
+        print(f"    action       : {decision.get('action')}", flush=flush)
+        print(f"    target       : {decision.get('target')}", flush=flush)
+        print(f"    confidence   : {decision.get('confidence')}", flush=flush)
+        print(f"    reason       : {decision.get('reason')}", flush=flush)
+
+        # --- Debug warnings (very important for you) ---
+        if signal.get("source") == "extracted" and signal.get("base_confidence") == 1.0:
+            print("  ⚠ WARNING", flush=flush)
+            print("    extracted signal has confidence=1.0 (persona bootstrap bug)", flush=flush)
+
+    print("\n=== END SIGNALS + DECISIONS ===\n", flush=flush)
+
+
+def print_persona_human_readable(persona, flush=True):
+    print("\n================ USER PERSONA (HUMAN READABLE) ================\n", flush=flush)
+
+    def print_block(title: str, block):
+        if block is None:
+            return
+
+        print(f"▶ {title}", flush=flush)
+        for field, value in block.model_dump().items():
+            if value in (None, "N/A", [], {}):
+                continue
+            print(f"  - {field}: {value}", flush=flush)
+        print("", flush=flush)
+
+    # --------------------------------------------------
+    # CORE IDENTITY
+    # --------------------------------------------------
+    print_block("User Identity", persona.user_identity)
+
+    # --------------------------------------------------
+    # COMPANY CONTEXT
+    # --------------------------------------------------
+    print_block("Company Profile", persona.company_profile)
+    print_block("Company Business", persona.company_business)
+    print_block("Company Products", persona.company_products)
+    print_block("Company Brand", persona.company_brand)
+
+    # --------------------------------------------------
+    # OBJECTIVE & CONTENT
+    # --------------------------------------------------
+    print_block("Objective", persona.objective)
+    print_block("Content Format", persona.content_format)
+    print_block("Audience", persona.audience)
+
+    # --------------------------------------------------
+    # STYLE & LANGUAGE
+    # --------------------------------------------------
+    print_block("Tone", persona.tone)
+    print_block("Writing Style", persona.writing_style)
+    print_block("Language", persona.language)
+
+    # --------------------------------------------------
+    # CONSTRAINTS
+    # --------------------------------------------------
+    print_block("Constraints", persona.constraints)
+
+    print("================ END USER PERSONA =================\n", flush=flush)
 
 # ------------------------------------------------------
 # 3. EXTRACT PERSONA FROM INTERACTION
@@ -147,14 +221,15 @@ async def learn_persona_from_interaction(user_id: str, user_prompt: str):
         # print("signals_Evidence:", signals, flush=True)
 
         signals = await enrich_signal_frequency(user_id, signals)
-        print("signals (enriched):", signals, flush=True)
+        
 
         print(">>> ABOUT TO RUN COGNITION", flush=True)
         decisions = await run_cognition(user_id, signals)
-        print("decisions:", decisions, flush=True)
+        print_signals_with_decisions(signals, decisions)
 
         filtered_persona = project_persona_by_decisions(extracted_persona, decisions)
-        print("filtered_persona:", filtered_persona, flush=True)
+        print("\n================ FILTERED PERSONA ================\n")
+        print_persona_human_readable(filtered_persona)
 
         if filtered_persona:
             print(">>> ABOUT TO UPDATE DB", flush=True)

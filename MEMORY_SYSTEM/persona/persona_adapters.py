@@ -1,22 +1,25 @@
 from copy import deepcopy
+from typing import List, Dict, Optional
+
 from MEMORY_SYSTEM.persona.persona_schema import UserPersonaModel
 
 
 # =========================================================
-# SIGNAL EMISSION (FIELD-LEVEL, EXPLICIT ONLY)
+# SIGNAL EMISSION (FIELD-LEVEL, EXPLICIT PERSONA ONLY)
 # =========================================================
 
-def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
+def persona_to_signals(extracted_persona: UserPersonaModel) -> List[Dict]:
     """
-    Convert structured persona blocks into cognition signal candidates.
+    Convert structured persona blocks into persona-authoritative signals.
 
-    RULES:
-    - Only emit signals for explicitly present values
-    - Never emit inferred or placeholder signals
-    - Confidence is taken directly from persona blocks
+    HARD RULES:
+    - These signals represent explicit user-declared persona
+    - They are NOT inferred
+    - They are NOT probabilistic
+    - They MUST bypass learning cognition
     """
 
-    signals: list[dict] = []
+    signals: List[Dict] = []
 
     def add_signal(
         *,
@@ -31,11 +34,14 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
             return
 
         signals.append({
-            "category": category,          # identity | organization | preference | constraint
+            "category": category,                 # identity | organization | preference | constraint
             "field": field,
             "value": value,
+
+            # epistemics
             "base_confidence": confidence,
-            "source": "extracted",
+            "source": "explicit",                 # FIX: never "extracted"
+            "epistemic_role": "persona",          # FIX: authoritative
             "frequency": 1,
         })
 
@@ -44,7 +50,6 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
     # =====================================================
     if extracted_persona.user_identity:
         ui = extracted_persona.user_identity
-
         add_signal(category="identity", field="job_title", value=ui.job_title, confidence=ui.confidence)
         add_signal(category="identity", field="seniority", value=ui.seniority, confidence=ui.confidence)
         add_signal(category="identity", field="function", value=ui.function, confidence=ui.confidence)
@@ -55,7 +60,6 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
     # =====================================================
     if extracted_persona.company_profile:
         cp = extracted_persona.company_profile
-
         add_signal(category="organization", field="company_name", value=cp.company_name, confidence=cp.confidence)
         add_signal(category="organization", field="industry", value=cp.industry, confidence=cp.confidence)
         add_signal(category="organization", field="company_size", value=cp.company_size, confidence=cp.confidence)
@@ -66,7 +70,6 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
     # =====================================================
     if extracted_persona.company_business:
         cb = extracted_persona.company_business
-
         add_signal(category="organization", field="business_model", value=cb.business_model, confidence=cb.confidence)
         add_signal(category="organization", field="sales_motion", value=cb.sales_motion, confidence=cb.confidence)
         add_signal(category="organization", field="target_customers", value=cb.target_customers, confidence=cb.confidence)
@@ -75,17 +78,15 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
     # COMPANY — PRODUCTS / TECH
     # =====================================================
     if extracted_persona.company_products:
-        cprod = extracted_persona.company_products
-
-        add_signal(category="organization", field="products", value=cprod.products, confidence=cprod.confidence)
-        add_signal(category="organization", field="tech_orientation", value=cprod.tech_orientation, confidence=cprod.confidence)
+        cp = extracted_persona.company_products
+        add_signal(category="organization", field="products", value=cp.products, confidence=cp.confidence)
+        add_signal(category="organization", field="tech_orientation", value=cp.tech_orientation, confidence=cp.confidence)
 
     # =====================================================
     # OBJECTIVE
     # =====================================================
     if extracted_persona.objective:
         obj = extracted_persona.objective
-
         add_signal(category="preference", field="primary_goal", value=obj.primary_goal, confidence=obj.confidence)
         add_signal(category="preference", field="desired_action", value=obj.desired_action, confidence=obj.confidence)
         add_signal(category="preference", field="success_criteria", value=obj.success_criteria, confidence=obj.confidence)
@@ -95,7 +96,6 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
     # =====================================================
     if extracted_persona.content_format:
         cf = extracted_persona.content_format
-
         add_signal(category="preference", field="preferred_format", value=cf.preferred_format, confidence=cf.confidence)
         add_signal(category="preference", field="length_preference", value=cf.length_preference, confidence=cf.confidence)
 
@@ -104,7 +104,6 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
     # =====================================================
     if extracted_persona.audience:
         aud = extracted_persona.audience
-
         add_signal(category="preference", field="audience_type", value=aud.audience_type, confidence=aud.confidence)
         add_signal(category="preference", field="audience_domain", value=aud.audience_domain, confidence=aud.confidence)
         add_signal(category="preference", field="audience_level", value=aud.audience_level, confidence=aud.confidence)
@@ -114,7 +113,6 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
     # =====================================================
     if extracted_persona.tone:
         tone = extracted_persona.tone
-
         add_signal(category="preference", field="tone", value=tone.tone, confidence=tone.confidence)
         add_signal(category="preference", field="voice", value=tone.voice, confidence=tone.confidence)
         add_signal(category="preference", field="emotional_intensity", value=tone.emotional_intensity, confidence=tone.confidence)
@@ -124,7 +122,6 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
     # =====================================================
     if extracted_persona.writing_style:
         ws = extracted_persona.writing_style
-
         add_signal(category="preference", field="style", value=ws.style, confidence=ws.confidence)
         add_signal(category="preference", field="sentence_structure", value=ws.sentence_structure, confidence=ws.confidence)
 
@@ -133,7 +130,6 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
     # =====================================================
     if extracted_persona.language:
         lang = extracted_persona.language
-
         add_signal(category="preference", field="language", value=lang.language, confidence=lang.confidence)
         add_signal(category="preference", field="complexity", value=lang.complexity, confidence=lang.confidence)
         add_signal(category="preference", field="jargon_policy", value=lang.jargon_policy, confidence=lang.confidence)
@@ -143,14 +139,13 @@ def persona_to_signals(extracted_persona: UserPersonaModel) -> list[dict]:
     # =====================================================
     if extracted_persona.constraints:
         cons = extracted_persona.constraints
-
         add_signal(category="constraint", field="constraints", value=cons.constraints, confidence=cons.confidence)
 
     return signals
 
 
 # =========================================================
-# PROJECTION BASED ON COGNITION DECISIONS (FIELD-ACCURATE)
+# FIELD → PERSONA BLOCK MAP (AUTHORITATIVE)
 # =========================================================
 
 FIELD_TO_BLOCK = {
@@ -193,7 +188,6 @@ FIELD_TO_BLOCK = {
     "tone": ("tone", "tone"),
     "voice": ("tone", "voice"),
     "emotional_intensity": ("tone", "emotional_intensity"),
-
     "style": ("writing_style", "style"),
     "sentence_structure": ("writing_style", "sentence_structure"),
 
@@ -207,19 +201,24 @@ FIELD_TO_BLOCK = {
 }
 
 
+# =========================================================
+# PERSONA PROJECTION (DECISION-DRIVEN, SAFE)
+# =========================================================
+
 def project_persona_by_decisions(
     extracted_persona: UserPersonaModel,
-    decisions: list[dict],
-) -> UserPersonaModel | None:
+    decisions: List[Dict],
+) -> Optional[UserPersonaModel]:
     """
-    Project a partial persona based on cognition decisions.
+    Project a partial persona based strictly on persona COMMIT decisions.
 
-    - Field-level accurate
-    - Block-safe
+    Guarantees:
+    - Field-accurate
     - No silent carryover
+    - No learning metadata leakage
     """
 
-    projected_blocks: dict = {}
+    projected_blocks: Dict[str, object] = {}
     any_commit = False
 
     for decision in decisions:
@@ -228,7 +227,10 @@ def project_persona_by_decisions(
         if decision.get("target") != "persona":
             continue
 
-        for field in decision.get("scope", []):
+        scope = decision.get("scope") or []
+        assert scope, "Persona COMMIT must include scope"
+
+        for field in scope:
             mapping = FIELD_TO_BLOCK.get(field)
             if not mapping:
                 continue
@@ -241,14 +243,12 @@ def project_persona_by_decisions(
             if block_name not in projected_blocks:
                 block = source_block.model_copy(deep=True)
 
-                # remove learning-only metadata
+                # strip learning metadata
                 if hasattr(block, "confidence"):
                     block.confidence = None
 
                 projected_blocks[block_name] = block
-
-
-            any_commit = True
+                any_commit = True
 
     if not any_commit:
         return None

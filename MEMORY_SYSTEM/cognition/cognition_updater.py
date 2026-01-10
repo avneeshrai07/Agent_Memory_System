@@ -16,6 +16,8 @@ async def run_cognition(
     Guarantees:
     - Cognition never mutates incoming signals
     - Every signal produces exactly one decision
+    - Persona signals NEVER enter learning cognition
+    - Persona decisions ALWAYS include scope
     - Logging failures never block cognition
     - Decision shape is always valid
     """
@@ -25,31 +27,35 @@ async def run_cognition(
     decisions: List[Dict[str, Any]] = []
 
     # --------------------------------------------------
-    # Load cognition config (fail-safe)
-    # --------------------------------------------------
-    # try:
-        # print(">>> ABOUT TO LOAD COGNITION CONFIG", flush=True)
-        # config = await load_cognition_config()
-        # print(">>> COGNITION CONFIG LOADED", config, flush=True)
-        # cognition_model = CognitionModel(config)
-        # print(">>> COGNITION MODEL CREATED", flush=True)
-
-    # except Exception as e:
-    #     print("⚠️ cognition config load failed:", repr(e), flush=True)
-    #     cognition_model = CognitionModel({})
-
-    # --------------------------------------------------
-    # Run cognition per signal
+    # Run cognition per signal (persona-aware)
     # --------------------------------------------------
     for signal in signal_candidates:
         safe_signal = dict(signal)
 
         try:
-            # print(">>> CALLING decide()", flush=True)
-            decision = await decide(safe_signal)
-            # print(">>> CALLED decide()", flush=True)
+            # ==================================================
+            # PERSONA SHORT-CIRCUIT (CRITICAL FIX)
+            # ==================================================
+            if safe_signal.get("epistemic_role") == "persona":
+                decision = {
+                    "action": "COMMIT",
+                    "target": "persona",
+                    "scope": [safe_signal["field"]],   # ✅ REQUIRED
+                    "confidence": 1.0,
+                    "reason": "explicit persona declaration",
+                }
 
-            # normalize decision shape
+                decisions.append(decision)
+
+                # Persona decisions are NOT logged as patterns
+                continue
+
+            # ==================================================
+            # LEARNABLE SIGNAL → NORMAL COGNITION
+            # ==================================================
+            decision = await decide(safe_signal)
+
+            # normalize decision shape (defensive)
             decision = {
                 "action": decision.get("action", "REJECT"),
                 "target": decision.get("target"),
@@ -64,9 +70,7 @@ async def run_cognition(
             # Non-blocking pattern log
             # -----------------------------
             try:
-                # print(">>> CALLING log_pattern_decision()", flush=True)
                 await log_pattern_decision(user_id, safe_signal, decision)
-                # print(">>> CALLED log_pattern_decision()", flush=True)
             except Exception as e:
                 print(
                     "⚠️ pattern log failed:",
