@@ -2,7 +2,7 @@ from typing import List, Dict
 import traceback
 
 
-def build_ltm_context(user_query, memories: List[Dict]) -> str:
+def build_ltm_context(memories: List[Dict]) -> str:
     """
     Convert retrieved LTM facts into a prompt-ready context block.
 
@@ -13,7 +13,7 @@ def build_ltm_context(user_query, memories: List[Dict]) -> str:
 
     try:
         if not memories:
-            return user_query
+            return ""
 
         lines = []
         for mem in memories:
@@ -30,13 +30,7 @@ def build_ltm_context(user_query, memories: List[Dict]) -> str:
             + "\n".join(lines)
         )
 
-        prompt = f"""
-            {context}
-
-            User question:
-            {user_query}
-            """
-        return prompt
+        return context
 
     except Exception:
         print("❌ [LTM-CONTEXT] Failed to build context")

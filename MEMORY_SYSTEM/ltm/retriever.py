@@ -4,86 +4,105 @@ import re
 
 from MEMORY_SYSTEM.database.connect.connect import db_manager
 from MEMORY_SYSTEM.embeddings.encoder import create_embedding
-from MEMORY_SYSTEM.ltm.context_builder import build_ltm_context
 
-# -------------------------------
-# Tunables (REALISTIC defaults)
-# -------------------------------
+
+# =====================================================
+# Tunables (empirically safe defaults)
+# =====================================================
 VECTOR_LIMIT = 12
-DISTANCE_THRESHOLD = 0.80   # cosine distance (similarity >= 0.20)
+MAX_DISTANCE = 1.05          # allow short-question recall
 MIN_CONFIDENCE = 0.6
 
 
-# -------------------------------
+# =====================================================
 # Utilities
-# -------------------------------
+# =====================================================
 def to_pgvector_literal(vec: List[float]) -> str:
     """Convert list[float] to pgvector literal string."""
     return "[" + ",".join(f"{x:.6f}" for x in vec) + "]"
 
 
 def normalize_text(text: str) -> str:
-    """Light canonicalization for deduplication."""
+    """Canonicalize text for semantic deduplication."""
     text = text.lower()
     text = re.sub(r"[^\w\s]", "", text)
     return text.strip()
 
 
+def extract_query_tokens(query: str) -> set[str]:
+    """Extract normalized tokens from query."""
+    return {
+        t.lower()
+        for t in re.findall(r"\b[a-zA-Z]{2,}\b", query)
+    }
+
+
 def chunk_query(user_query: str) -> List[str]:
     """
-    Split multi-fact user input into atomic semantic chunks.
+    Split user input into atomic semantic chunks.
+    Prevents embedding dilution for multi-fact queries.
     """
-    # Simple rule-based splitter (works well in practice)
     parts = re.split(r"\n|\.|\band\b", user_query)
-    chunks = [p.strip() for p in parts if len(p.strip()) > 8]
-    return chunks
+    return [p.strip() for p in parts if len(p.strip()) > 8]
 
 
-def is_relevant(row: Dict, query_text: str) -> bool:
+def is_relevant(row: Dict, query_tokens: set[str]) -> bool:
     """
-    Hybrid relevance check.
+    Hybrid relevance gate:
+    - confidence first
+    - topic-intent alignment
+    - distance as fallback
     """
+
     if row["confidence_score"] < MIN_CONFIDENCE:
         return False
 
-    if row["distance"] <= DISTANCE_THRESHOLD:
+    topic = (row.get("semantic_topic") or "").lower()
+    distance = row["distance"]
+
+    # 1️⃣ Topic ↔ intent alignment (primary signal)
+    if topic and topic in query_tokens:
         return True
 
-    topic = row.get("semantic_topic") or ""
-    return topic.lower() in query_text.lower()
+    # 2️⃣ Vector fallback (short queries)
+    if distance <= MAX_DISTANCE:
+        return True
+
+    return False
 
 
-# -------------------------------
+# =====================================================
 # Main Retrieval Function
-# -------------------------------
+# =====================================================
 async def retrieve_ltm_memories(
     user_id: str,
     user_query: str
 ) -> List[Dict]:
     """
-    Retrieve relevant long-term memories for a given user query.
+    Retrieve relevant long-term memories for a user query.
 
-    - Safe (never crashes agent)
-    - Chunk-aware
-    - Deduplicated
-    - Returns DATA, not prompt text
+    Guarantees:
+    - Never raises
+    - Never returns prompt text
+    - Returns clean, deduplicated memory records
     """
 
     print("\n================ FETCHING LT MEMORIES ================\n")
 
     # -------------------------------------------------
-    # 1. Chunk the query (CRITICAL FIX)
+    # 1. Preprocess query
     # -------------------------------------------------
     try:
         query_chunks = chunk_query(user_query)
         if not query_chunks:
             return []
+
+        query_tokens = extract_query_tokens(user_query)
+
     except Exception:
-        print("❌ [LTM-RETRIEVE] Failed to chunk query")
+        print("❌ [LTM-RETRIEVE] Query preprocessing failed")
         traceback.print_exc()
         return []
-
-    all_rows: List[Dict] = []
 
     # -------------------------------------------------
     # 2. DB pool
@@ -94,6 +113,8 @@ async def retrieve_ltm_memories(
         print("❌ [LTM-RETRIEVE] Failed to acquire DB pool")
         traceback.print_exc()
         return []
+
+    all_rows: List[Dict] = []
 
     # -------------------------------------------------
     # 3. Multi-pass vector retrieval
@@ -127,7 +148,7 @@ async def retrieve_ltm_memories(
                     VECTOR_LIMIT
                 )
 
-            all_rows.extend([dict(r) for r in rows])
+            all_rows.extend(dict(r) for r in rows)
 
         except Exception:
             print("❌ [LTM-RETRIEVE] Vector search failed for chunk:", chunk)
@@ -150,7 +171,7 @@ async def retrieve_ltm_memories(
             if norm_fact in seen:
                 continue
 
-            if not is_relevant(row, user_query):
+            if not is_relevant(row, query_tokens):
                 continue
 
             seen.add(norm_fact)
@@ -158,10 +179,10 @@ async def retrieve_ltm_memories(
 
         print("\n================ FILTERED LT MEMORIES ================\n")
         print(relevant)
-
-        return build_ltm_context(user_query=user_query, memories=relevant)
+        
+        return relevant
 
     except Exception:
-        print("❌ [LTM-RETRIEVE] Failed during filtering/deduplication")
+        print("❌ [LTM-RETRIEVE] Filtering/deduplication failed")
         traceback.print_exc()
         return []

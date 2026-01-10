@@ -173,7 +173,7 @@ async def store_ltm_facts(
             # -----------------------------------------
             else:
                 try:
-                    print("🆕 [LTM] Creating new memory")
+                    # print("🆕 [LTM] Creating new memory")
 
                     row = await conn.fetchrow(
                         """
@@ -210,7 +210,7 @@ async def store_ltm_facts(
                     )
 
                     memory_id = row["memory_id"]
-                    print(f"✅ [LTM] Stored new memory {memory_id}")
+                    # print(f"✅ [LTM] Stored new memory {memory_id}")
 
                 except Exception:
                     print("❌ [LTM] Memory insert failed")
@@ -246,7 +246,7 @@ async def store_ltm_facts(
                     raw_context[:500]
                 )
 
-                print("📚 [LTM] Evidence logged")
+                # print("📚 [LTM] Evidence logged")
 
             except Exception:
                 print("❌ [LTM] Evidence logging failed")

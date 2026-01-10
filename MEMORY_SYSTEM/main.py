@@ -22,6 +22,7 @@ from MEMORY_SYSTEM.persona.persona_agent_flow import build_user_persona_system_p
 from MEMORY_SYSTEM.persona.persona_agent_flow import learn_persona_from_interaction
 from MEMORY_SYSTEM.ltm.extract_ltm import extract_ltm_facts
 from MEMORY_SYSTEM.ltm.retriever import retrieve_ltm_memories
+from MEMORY_SYSTEM.ltm.context_builder import build_ltm_context
 import traceback
 from langchain_aws import ChatBedrock
 
@@ -78,8 +79,15 @@ async def bedrock_llm_call(
 
 
         try:
-            user_lt_memories = await retrieve_ltm_memories(user_id=user_id, user_query=user_prompt)
-            final_user_prompt = user_lt_memories
+            memories = await retrieve_ltm_memories(user_id, user_prompt)
+            ltm_context = build_ltm_context(memories)
+
+            final_user_prompt = f"""
+            {ltm_context}
+
+            User question:
+            {user_prompt}
+            """
         except Exception:
             final_user_prompt = user_prompt
 
@@ -140,13 +148,7 @@ if __name__ == "__main__":
 """
 
     user_prompt="""
-    From now on, please keep all responses concise and technical.
-
-    For this project, we are using PostgreSQL as the primary database and Redis for caching.
-
-    Deployment must go through a manual approval process and cannot be fully automated.
-
-    Do not suggest microservices — we have decided to keep a monolithic architecture.
+    So which DB should we start first?
 """
 #     user_prompt = """
 # write it in bullet points and keep it short
