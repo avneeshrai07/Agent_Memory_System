@@ -25,39 +25,26 @@ async def ensure_memories_table_exists() -> None:
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS agentic_memory_schema.memories (
-                    memory_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                memory_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-                    -- ownership (MANDATORY)
-                    user_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
 
-                    -- atomic fact (IMMUTABLE MEANING)
-                    fact TEXT NOT NULL,
+                fact TEXT NOT NULL,
+                memory_type TEXT NOT NULL,
+                semantic_topic TEXT,
 
-                    -- classification
-                    memory_type TEXT NOT NULL,
-                    semantic_topic TEXT,
+                confidence_score REAL NOT NULL CHECK (confidence_score >= 0 AND confidence_score <= 1),
+                confidence_source TEXT NOT NULL DEFAULT 'explicit',
 
-                    -- belief model
-                    confidence_score NUMERIC(4,3) CHECK (confidence_score >= 0 AND confidence_score <= 1),
-                    confidence_source TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
 
-                    -- reinforcement
-                    evidence_count INTEGER DEFAULT 1,
-                    positive_signals INTEGER DEFAULT 0,
-                    negative_signals INTEGER DEFAULT 0,
+                embedding VECTOR(1024) NOT NULL,
 
-                    -- lifecycle
-                    status TEXT NOT NULL,
-                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
-                    last_seen_at TIMESTAMP WITHOUT TIME ZONE,
-                    last_used_at TIMESTAMP WITHOUT TIME ZONE,
+                evidence_count INTEGER NOT NULL DEFAULT 1,
 
-                    -- semantic search
-                    embedding VECTOR(1536),
-
-                    -- flexible metadata
-                    metadata JSONB
-                );
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
                 """
             )
 

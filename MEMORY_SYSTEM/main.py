@@ -20,6 +20,8 @@ from MEMORY_SYSTEM.runtime.background_worker import submit_background_task
 from MEMORY_SYSTEM.context.build_cognition_context import build_epistemic_system_prompt
 from MEMORY_SYSTEM.persona.persona_agent_flow import build_user_persona_system_prompt
 from MEMORY_SYSTEM.persona.persona_agent_flow import learn_persona_from_interaction
+from MEMORY_SYSTEM.ltm.extract_ltm import extract_ltm_facts
+from MEMORY_SYSTEM.ltm.retriever import retrieve_ltm_memories
 import traceback
 from langchain_aws import ChatBedrock
 
@@ -68,21 +70,34 @@ async def bedrock_llm_call(
 ):
     try:
         try:
-            print("base_system_prompt:  ",base_system_prompt)
             epistemic_system_prompt = build_epistemic_system_prompt(base_system_prompt)
             final_system_prompt = await build_user_persona_system_prompt(user_id, epistemic_system_prompt)
-            print("#"*40)
-            print("final_system_prompt:  ",final_system_prompt)
-            print("#"*40)
         except Exception:
             final_system_prompt = base_system_prompt
 
+
+
+        try:
+            user_lt_memories = await retrieve_ltm_memories(user_id=user_id, user_query=user_prompt)
+            final_user_prompt = user_lt_memories
+        except Exception:
+            final_user_prompt = user_prompt
+
+        
+        print("#"*40)
+        print("final_system_prompt:  ",final_system_prompt)
+        print("*"*40)
+        print("final_user_prompt:  ",final_user_prompt)
+        print("#"*40)
+
         # structured_llm = llm.with_structured_output(persona_model)
+
+
 
         response = await llm.ainvoke(
             [
                 {"role": "system", "content": final_system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": final_user_prompt}
             ]
         )
         # --------------------------------------------------
@@ -98,8 +113,13 @@ async def bedrock_llm_call(
         agent_response = response.model_dump()
         # print("agent_response:  ",agent_response)
         print(agent_response.get('content'))
+        agent_response_content = agent_response.get('content')
+
+        submit_background_task(
+            await extract_ltm_facts(user_id, user_prompt, agent_response_content)
+        )
         # print("agent_response_type", agent_response)
-        return agent_response
+        return agent_response_content
 
     except Exception as e:
         return {
@@ -120,7 +140,13 @@ if __name__ == "__main__":
 """
 
     user_prompt="""
-    my name is avneesh i am a lead software developer at orbitaim, write the email again
+    From now on, please keep all responses concise and technical.
+
+    For this project, we are using PostgreSQL as the primary database and Redis for caching.
+
+    Deployment must go through a manual approval process and cannot be fully automated.
+
+    Do not suggest microservices — we have decided to keep a monolithic architecture.
 """
 #     user_prompt = """
 # write it in bullet points and keep it short

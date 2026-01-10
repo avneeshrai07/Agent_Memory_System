@@ -35,7 +35,8 @@ llm = ChatBedrock(
 async def bedrock_structured_llm_call(
     system_prompt: str,
     user_prompt: str,
-    output_structure: BaseModel
+    output_structure: BaseModel,
+    model_dump: bool = False
 ):
     
     structured_llm = llm.with_structured_output(output_structure)
@@ -49,6 +50,10 @@ async def bedrock_structured_llm_call(
         return {"error": "bedrock returned null response"}
 
     print("agent_response_type", response)
-    return response
+    if model_dump==True:
+        extracted = response.model_dump() 
+        return extracted
+    else:
+        return response
 
 

@@ -16,23 +16,22 @@ async def ensure_memory_events_table_exists() -> None:
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS agentic_memory_schema.memory_events (
-                    event_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-                    -- linkage
-                    memory_id UUID NOT NULL
-                        REFERENCES agentic_memory_schema.memories(memory_id)
-                        ON DELETE CASCADE,
+                memory_id UUID NOT NULL
+                    REFERENCES agentic_memory_schema.memories(memory_id)
+                    ON DELETE CASCADE,
 
-                    -- event semantics
-                    event_type TEXT NOT NULL,
-                    source TEXT,
-                    signal_strength NUMERIC(4,3) CHECK (signal_strength >= 0 AND signal_strength <= 1),
+                event_type TEXT NOT NULL,
+                source TEXT NOT NULL,
 
-                    -- raw traceability
-                    raw_context TEXT,
+                signal_strength REAL CHECK (signal_strength >= 0 AND signal_strength <= 1),
 
-                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
-                );
+                raw_context TEXT,
+
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
                 """
             )
 
