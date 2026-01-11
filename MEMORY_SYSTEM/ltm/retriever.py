@@ -5,7 +5,7 @@ import numpy as np
 
 from MEMORY_SYSTEM.database.connect.connect import db_manager
 from MEMORY_SYSTEM.embeddings.encoder import create_embedding
-
+from MEMORY_SYSTEM.ltm.retrieve_episodic import retrieve_episodic_context
 
 # =====================================================
 # Tunables (production-safe defaults)
@@ -134,31 +134,48 @@ INTENT_LIMITS = {
 # =====================================================
 # Main Retrieval Function
 # =====================================================
+# =====================================================
+# Main Retrieval Function (CORRECT, PRODUCTION-GRADE)
+# =====================================================
 async def retrieve_ltm_memories(
     user_id: str,
     user_query: str,
     include_supporting: bool = False,
-) -> List[Dict]:
+) -> Dict[str, List[Dict]]:
     """
-    Canonical LTM retrieval
-    - Intent-aware
-    - Confidence-gated
-    - Vector-first
-    - Deterministic ranking
+    Canonical LTM retrieval.
+
+    Architecture rules enforced:
+    - Episodic memory is ALWAYS retrieved
+    - Episodic memory primes reasoning, does not compete
+    - Factual memory is ranked deterministically
+    - No heuristic gating at retrieval time
     """
 
     try:
         query_chunks = chunk_query(user_query)
         if not query_chunks:
-            return []
+            return {"episodic": [], "factual": []}
 
         query_tokens = extract_query_tokens(user_query)
         intent = await detect_query_intent_embedding(user_query)
 
     except Exception:
         traceback.print_exc()
-        return []
+        return {"episodic": [], "factual": []}
 
+    # -------------------------------------------------
+    # 1️⃣ ALWAYS retrieve episodic LTM (NO HEURISTICS)
+    # -------------------------------------------------
+    try:
+        episodic = await retrieve_episodic_context(user_id)
+    except Exception:
+        traceback.print_exc()
+        episodic = []
+
+    # -------------------------------------------------
+    # 2️⃣ Retrieve factual LTM (existing logic preserved)
+    # -------------------------------------------------
     pool = await db_manager.get_pool()
     all_rows: List[Dict] = []
 
@@ -168,9 +185,6 @@ async def retrieve_ltm_memories(
         else "status IN ('active','supporting')"
     )
 
-    # -------------------------------------------------
-    # Vector retrieval (multi-chunk)
-    # -------------------------------------------------
     for chunk in query_chunks:
         try:
             emb = await create_embedding(chunk)
@@ -192,6 +206,7 @@ async def retrieve_ltm_memories(
                         embedding <-> $2::vector AS distance
                     FROM agentic_memory_schema.memories
                     WHERE user_id = $1
+                      AND memory_kind = 'factual'
                       AND {status_clause}
                       AND confidence_score >= $4
                     ORDER BY embedding <-> $2::vector
@@ -210,7 +225,7 @@ async def retrieve_ltm_memories(
             continue
 
     # -------------------------------------------------
-    # Ranking & deduplication
+    # 3️⃣ Rank factual memories (episodic-aware, not episodic-gated)
     # -------------------------------------------------
     seen = set()
     ranked: List[Dict] = []
@@ -227,11 +242,22 @@ async def retrieve_ltm_memories(
         if not (topic_match or vector_match):
             continue
 
+        # Episodic alignment boost (soft, optional)
+        episodic_boost = 0.0
+        for e in episodic:
+            if (
+                e["confidence_score"] >= 0.8
+                and e["fact"].lower() in row["fact"].lower()
+            ):
+                episodic_boost = 1.5
+                break
+
         row["_score"] = (
             (2.0 if topic_match else 0.0)
             + (1.0 - min(row["distance"], 1.0))
             + (row["importance"] / 10.0)
             + row["confidence_score"]
+            + episodic_boost
         )
 
         ranked.append(row)
@@ -239,11 +265,11 @@ async def retrieve_ltm_memories(
     ranked.sort(key=lambda r: r["_score"], reverse=True)
 
     # -------------------------------------------------
-    # Intent-aware capping
+    # 4️⃣ Intent-aware capping (FACTUAL ONLY)
     # -------------------------------------------------
     limits = INTENT_LIMITS.get(intent, {})
     per_category = {}
-    final: List[Dict] = []
+    final_factual: List[Dict] = []
 
     for row in ranked:
         cat = row["category"]
@@ -253,7 +279,13 @@ async def retrieve_ltm_memories(
             continue
 
         per_category[cat] = per_category.get(cat, 0) + 1
-        row.pop("_score", None)
-        final.append(row)
+        row["relevance_score"] = round(row.pop("_score"), 6)
+        final_factual.append(row)
 
-    return final
+    # -------------------------------------------------
+    # 5️⃣ RETURN (SEPARATED, INTENTIONAL)
+    # -------------------------------------------------
+    return {
+        "episodic": episodic,     # injected into STM later
+        "factual": final_factual  # injected into reasoning
+    }

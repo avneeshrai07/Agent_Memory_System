@@ -100,11 +100,17 @@ async def bedrock_llm_call(
 
 
         try:
-            memories = await retrieve_ltm_memories(user_id, user_prompt)
-            ltm_context = build_ltm_context(memories)
-            print("\n\n===================LONG TERMS MEMORIES START===================\n\n")
-            print(ltm_context)
-            print("\n\n===================LONG TERM MEMORIES END===================\n\n")
+            ltm_memories = await retrieve_ltm_memories(user_id, user_prompt)
+            episodic = ltm_memories.get("episodic",None)
+            factual = ltm_memories.get("factual",None)
+            ltm_context = build_ltm_context(factual)
+            print("\n\n===================LONG TERMS EPISODIC MEMORIES START===================\n\n")
+            print(episodic)
+            print("\n\n===================LONG TERM EPISODIC MEMORIES END===================\n\n")
+
+            print("\n\n===================LONG TERMS FACTUAL MEMORIES START===================\n\n")
+            print(factual)
+            print("\n\n===================LONG TERM FACTUAL MEMORIES END===================\n\n")
 
             final_user_prompt = f"""
             {ltm_context}

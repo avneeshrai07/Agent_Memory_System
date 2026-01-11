@@ -1,25 +1,19 @@
 from typing import List, Dict
 import traceback
-
+import json
 from MEMORY_SYSTEM.database.connect.connect import db_manager
 from MEMORY_SYSTEM.embeddings.encoder import create_embedding
 
+
 # -------------------------------
-# Tunables (aligned with new LTM)
+# Tunables
 # -------------------------------
-SEMANTIC_DUP_DISTANCE = 0.12     # cosine distance threshold
+SEMANTIC_DUP_DISTANCE = 0.12
 IMPORTANCE_INCREMENT = 0.5
 MAX_IMPORTANCE = 10.0
 
 
-# -------------------------------------------------
-# pgvector serialization helper (CRITICAL)
-# -------------------------------------------------
 def to_pgvector_literal(vec: List[float]) -> str:
-    """
-    Convert a list[float] into a pgvector-compatible literal string.
-    Example: [0.1, -0.2] -> "[0.100000,-0.200000]"
-    """
     return "[" + ",".join(f"{x:.6f}" for x in vec) + "]"
 
 
@@ -28,12 +22,6 @@ async def store_ltm_facts(
     extracted_facts: List[Dict],
     raw_context: str
 ) -> None:
-    """
-    Store extracted facts into Long-Term Memory with:
-    - semantic deduplication
-    - frequency & importance reinforcement
-    - event logging
-    """
 
     print("\n💾 [LTM] Starting LTM storage")
 
@@ -41,11 +29,11 @@ async def store_ltm_facts(
         print("ℹ️ [LTM] No extracted facts provided")
         return
 
-    # -------------------------------------------------
-    # 1. Prepare items (NO DB yet)
-    # -------------------------------------------------
     prepared_items = []
 
+    # -------------------------------------------------
+    # 1️⃣ Prepare items
+    # -------------------------------------------------
     for idx, item in enumerate(extracted_facts):
         try:
             fact = item.get("fact")
@@ -58,18 +46,11 @@ async def store_ltm_facts(
             confidence_source = confidence.get("source", "implicit")
 
             if not fact or not category or not topic:
-                print(f"⚠️ [LTM] Skipping invalid fact at index {idx}: {item}")
                 continue
 
-            print(f"🧠 [LTM] Embedding fact: {fact}")
-
             embedding = await create_embedding(fact)
-
             if hasattr(embedding, "tolist"):
                 embedding = embedding.tolist()
-
-            if not isinstance(embedding, list):
-                raise TypeError(f"Embedding must be list before serialization, got {type(embedding)}")
 
             embedding = to_pgvector_literal(embedding)
 
@@ -80,42 +61,30 @@ async def store_ltm_facts(
                 "importance": importance,
                 "confidence_score": confidence_score,
                 "confidence_source": confidence_source,
-                "embedding": embedding
+                "embedding": embedding,
+                "metadata": json.dumps({}),   # ✅ explicit
             })
 
         except Exception:
-            print(f"❌ [LTM] Failed preparing fact at index {idx}")
             traceback.print_exc()
             continue
 
     if not prepared_items:
-        print("ℹ️ [LTM] No valid items after preparation")
         return
 
     # -------------------------------------------------
-    # 2. DB Operations
+    # 2️⃣ DB operations
     # -------------------------------------------------
-    try:
-        pool = await db_manager.get_pool()
-    except Exception:
-        print("❌ [LTM] Failed to acquire DB pool")
-        traceback.print_exc()
-        return
+    pool = await db_manager.get_pool()
 
     async with pool.acquire() as conn:
         for item in prepared_items:
             fact = item["fact"]
-            embedding = item["embedding"]
-            category = item["category"]
-            topic = item["topic"]
-            importance = item["importance"]
-            confidence_score = item["confidence_score"]
-            confidence_source = item["confidence_source"]
 
             print(f"\n🧠 [LTM] Processing DB ops for: {fact}")
 
             # -----------------------------------------
-            # 2.1 Semantic deduplication
+            # 2.1 Deduplication (FACTUAL ONLY)
             # -----------------------------------------
             try:
                 row = await conn.fetchrow(
@@ -126,32 +95,26 @@ async def store_ltm_facts(
                         embedding <-> $2::vector AS distance
                     FROM agentic_memory_schema.memories
                     WHERE user_id = $1
+                      AND memory_kind = 'factual'
                       AND status = 'active'
                     ORDER BY embedding <-> $2::vector
                     LIMIT 1
                     """,
                     user_id,
-                    embedding
+                    item["embedding"],
                 )
             except Exception:
-                print("❌ [LTM] Deduplication query failed")
                 traceback.print_exc()
                 continue
 
             # -----------------------------------------
-            # 2.2 Reinforce existing memory
+            # 2.2 Reinforce
             # -----------------------------------------
             if row and row["distance"] < SEMANTIC_DUP_DISTANCE:
                 try:
-                    memory_id = row["memory_id"]
                     new_importance = min(
                         row["importance"] + IMPORTANCE_INCREMENT,
                         MAX_IMPORTANCE
-                    )
-
-                    print(
-                        f"🔁 [LTM] Reinforcing memory {memory_id} "
-                        f"(distance={row['distance']:.4f})"
                     )
 
                     await conn.execute(
@@ -163,17 +126,18 @@ async def store_ltm_facts(
                             last_updated = NOW()
                         WHERE memory_id = $1
                         """,
-                        memory_id,
-                        new_importance
+                        row["memory_id"],
+                        new_importance,
                     )
 
+                    memory_id = row["memory_id"]
+
                 except Exception:
-                    print("❌ [LTM] Reinforcement update failed")
                     traceback.print_exc()
                     continue
 
             # -----------------------------------------
-            # 2.3 Insert new memory
+            # 2.3 Insert new factual memory
             # -----------------------------------------
             else:
                 try:
@@ -181,12 +145,14 @@ async def store_ltm_facts(
                         """
                         INSERT INTO agentic_memory_schema.memories (
                             user_id,
+                            memory_kind,
                             category,
                             topic,
                             fact,
                             importance,
                             confidence_score,
                             confidence_source,
+                            frequency,
                             status,
                             embedding,
                             metadata,
@@ -194,30 +160,37 @@ async def store_ltm_facts(
                             last_updated
                         )
                         VALUES (
-                            $1, $2, $3, $4, $5,
-                            $6, $7,
+                            $1,
+                            'factual',
+                            $2,
+                            $3,
+                            $4,
+                            $5,
+                            $6,
+                            $7,
+                            1,
                             'active',
-                            $8::vector,
-                            '{}',
+                            $8,
+                            $9,
                             NOW(),
                             NOW()
                         )
                         RETURNING memory_id
                         """,
                         user_id,
-                        category,
-                        topic,
-                        fact,
-                        importance,
-                        confidence_score,
-                        confidence_source,
-                        embedding
+                        item["category"],
+                        item["topic"],
+                        item["fact"],
+                        item["importance"],
+                        item["confidence_score"],
+                        item["confidence_source"],
+                        item["embedding"],
+                        item["metadata"],
                     )
 
                     memory_id = row["memory_id"]
 
                 except Exception:
-                    print("❌ [LTM] Memory insert failed")
                     traceback.print_exc()
                     continue
 
@@ -247,13 +220,12 @@ async def store_ltm_facts(
                     )
                     """,
                     memory_id,
-                    confidence_score,
-                    raw_context[:500]
+                    item["confidence_score"],
+                    raw_context[:500],
                 )
-
+                print("\n🎉 [LTM FACTUAL] Storage completed successfully")
             except Exception:
-                print("❌ [LTM] Event logging failed")
                 traceback.print_exc()
                 continue
 
-    print("\n🎉 [LTM] Storage completed successfully")
+    
