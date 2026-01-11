@@ -12,7 +12,7 @@ from MEMORY_SYSTEM.embeddings.encoder import create_embedding
 # =====================================================
 VECTOR_LIMIT = 20
 MAX_DISTANCE = 1.05
-MIN_CONFIDENCE = 0.6
+MIN_CONFIDENCE = 0.65
 INTENT_CONFIDENCE_THRESHOLD = 0.25
 
 
@@ -110,23 +110,23 @@ async def detect_query_intent_embedding(query: str) -> str:
 
 
 # =====================================================
-# Intent-aware caps (critical)
+# Intent-aware caps (aligned with canonical LTM)
 # =====================================================
 INTENT_LIMITS = {
     "exploratory": {
         "technical_context": 3,
         "problem_domain": 3,
-        "goal": 1,
-        "user_preference": 1,
+        "constraint": 2,
+        "preference": 1,
     },
     "focused": {
         "technical_context": 2,
         "problem_domain": 1,
-        "goal": 1,
+        "constraint": 1,
     },
     "minimal": {
         "technical_context": 1,
-        "goal": 1,
+        "constraint": 1,
     },
 }
 
@@ -140,11 +140,10 @@ async def retrieve_ltm_memories(
     include_supporting: bool = False,
 ) -> List[Dict]:
     """
-    Post-consolidation LTM retrieval.
-
-    - Canonical-first
+    Canonical LTM retrieval
     - Intent-aware
-    - Topic-aware
+    - Confidence-gated
+    - Vector-first
     - Deterministic ranking
     """
 
@@ -184,20 +183,24 @@ async def retrieve_ltm_memories(
                 rows = await conn.fetch(
                     f"""
                     SELECT
+                        memory_id,
+                        category,
+                        topic,
                         fact,
-                        memory_type,
-                        semantic_topic,
+                        importance,
                         confidence_score,
                         embedding <-> $2::vector AS distance
                     FROM agentic_memory_schema.memories
                     WHERE user_id = $1
                       AND {status_clause}
+                      AND confidence_score >= $4
                     ORDER BY embedding <-> $2::vector
                     LIMIT $3;
                     """,
                     user_id,
                     vec,
                     VECTOR_LIMIT,
+                    MIN_CONFIDENCE,
                 )
 
             all_rows.extend(dict(r) for r in rows)
@@ -207,31 +210,27 @@ async def retrieve_ltm_memories(
             continue
 
     # -------------------------------------------------
-    # Topic-aware filtering + ranking
+    # Ranking & deduplication
     # -------------------------------------------------
-    seen_keys = set()
+    seen = set()
     ranked: List[Dict] = []
 
     for row in all_rows:
-        if row["confidence_score"] < MIN_CONFIDENCE:
+        key = (row["category"], row["topic"])
+        if key in seen:
             continue
+        seen.add(key)
 
-        key = (row["memory_type"], row["semantic_topic"])
-        if key in seen_keys:
-            continue
-
-        topic = (row.get("semantic_topic") or "").lower()
-        topic_match = topic and topic in query_tokens
+        topic_match = row["topic"].lower() in query_tokens
         vector_match = row["distance"] <= MAX_DISTANCE
 
         if not (topic_match or vector_match):
             continue
 
-        seen_keys.add(key)
-
         row["_score"] = (
             (2.0 if topic_match else 0.0)
             + (1.0 - min(row["distance"], 1.0))
+            + (row["importance"] / 10.0)
             + row["confidence_score"]
         )
 
@@ -240,20 +239,20 @@ async def retrieve_ltm_memories(
     ranked.sort(key=lambda r: r["_score"], reverse=True)
 
     # -------------------------------------------------
-    # Intent-aware capping (final control)
+    # Intent-aware capping
     # -------------------------------------------------
     limits = INTENT_LIMITS.get(intent, {})
-    per_type_count = {}
+    per_category = {}
     final: List[Dict] = []
 
     for row in ranked:
-        mtype = row["memory_type"]
-        limit = limits.get(mtype, 1)
+        cat = row["category"]
+        limit = limits.get(cat, 1)
 
-        if per_type_count.get(mtype, 0) >= limit:
+        if per_category.get(cat, 0) >= limit:
             continue
 
-        per_type_count[mtype] = per_type_count.get(mtype, 0) + 1
+        per_category[cat] = per_category.get(cat, 0) + 1
         row.pop("_score", None)
         final.append(row)
 

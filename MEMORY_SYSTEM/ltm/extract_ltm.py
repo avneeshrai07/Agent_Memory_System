@@ -3,7 +3,7 @@
 import json
 from typing import List, Dict
 from MEMORY_SYSTEM.llm.bedrock_structured import bedrock_structured_llm_call
-from MEMORY_SYSTEM.ltm.ltm_fact_schema import LTMFactList
+from MEMORY_SYSTEM.ltm.ltm_fact_schema import LTMMemoryExtractionBatch
 from MEMORY_SYSTEM.ltm.store_ltm import store_ltm_facts
 async def extract_ltm_facts(
     user_id: str,
@@ -13,83 +13,108 @@ async def extract_ltm_facts(
     print("\n🧠 [LTM-EXTRACT] Starting extraction")
 
     system_prompt = """
-You are a candidate extraction engine for a long-term memory system.
+You are a memory extraction engine for a conversational AI system.
 
-Your job is to IDENTIFY POSSIBLE long-term memory facts
-explicitly mentioned or clearly stated by the USER.
+Your task is to extract ONLY durable, reusable information that should be stored
+in Long-Term Memory (LTM) to improve future interactions.
 
-IMPORTANT:
-- You are NOT responsible for deciding truth or permanence.
-- You are allowed to normalize wording to create clean, atomic facts.
-- You are allowed to restate user statements more clearly.
-- Your output will be VERIFIED by another system later.
+STRICT RULES:
+- Extract FACTS, not conversation.
+- Do NOT summarize the discussion.
+- Do NOT restate the assistant’s reasoning.
+- Do NOT infer intent unless explicitly stated.
+- Do NOT invent information.
+- Do NOT store temporary confusion, questions, or session-only context.
 
-ALLOWED:
-- Normalize tense, grammar, and phrasing.
-- Split compound statements into atomic facts.
-- Convert instructions or declarations into factual form.
-- Extract preferences, technical context, constraints, goals, validations, and corrections.
+ONLY extract information that:
+1. Will still be useful in a future session
+2. Can stand alone without conversational context
+3. Affects future reasoning, constraints, preferences, or advice
 
-DISALLOWED:
-- Do NOT invent new information.
-- Do NOT use background knowledge.
-- Do NOT add facts that are not grounded in the user message.
-- Do NOT infer unstated technologies, budgets, architectures, or preferences.
+WHAT TO EXTRACT:
+- Explicit technical facts (systems, scale, metrics)
+- Hard constraints (cannot do X, must do Y)
+- Stable preferences (format, depth, style) if explicit
+- Validated outcomes (what worked / did not work)
+- Repeated or clearly stated problem domains
+- Clear expertise indicators
 
-IMPORTANT BEHAVIOR:
-- If the user message contains durable decisions, configurations, or preferences,
-  extract them even if they require light rephrasing.
-- If the message contains only temporary status updates or plans,
-  it is acceptable to return no facts.
+WHAT NOT TO EXTRACT:
+- Single-use questions
+- Ongoing troubleshooting steps
+- Hypotheses or guesses
+- Assistant suggestions unless validated by the user
+- Anything that only matters inside this session
+
+CONFIDENCE RULES:
+- Explicit user statements → confidence = 1.0
+- Validated outcomes → confidence = 0.9
+- Repeated signals → confidence = 0.75–0.85
+- Ambiguous signals → DO NOT EXTRACT
+
+OUTPUT FORMAT:
+- Return ONLY valid JSON
+- No markdown
+- No explanation text
+- No commentary
+
+If no durable memories exist, return an empty JSON array [].
 
     """
 
     user_prompt = f"""
-Extract POSSIBLE long-term memory facts from the USER message below.
+Extract long-term memories from the following exchange.
 
 USER MESSAGE:
 
 {user_message}
 
 
-ASSISTANT MESSAGE (context only, do not extract from):
+ASSISTANT RESPONSE:
 
 {assistant_message}
 
 
 INSTRUCTIONS:
-- Identify statements that could represent durable preferences, constraints,
-  technical context, goals, validations, or corrections.
-- You MAY normalize wording to make facts clearer and atomic.
-- You MUST NOT invent information not present in the user message.
-- You MUST NOT rely on assumptions or typical patterns.
+- Extract 0 to 5 memories
+- Each memory must be atomic and independently reusable
+- Phrase memories as factual statements, not summaries
+- Prefer precision over completeness
 
-For each candidate fact, return:
-- fact: a clear, normalized statement
-- memory_type: one of ["technical_context", "user_preference", "constraint", "goal", "validation", "correction"]
-- semantic_topic: short label (2–4 words) or null
-- confidence_score: 0.0–1.0 based on how explicitly the user stated it
+For each extracted memory, return an object with:
 
+- category: one of
+  ["technical_context", "problem_domain", "constraint", "preference", "expertise", "validated_outcome", "learned_pattern"]
+
+- topic: short label (3–6 words)
+
+- fact: a precise factual statement
+
+- importance: number from 1 to 10
+  (10 = critical, long-lasting, repeatedly relevant)
+
+- confidence:
+  (
+    "score": number from 0.0 to 1.0,
+    "source": one of ["explicit", "validated", "implicit"]
+  )
+
+Return the result as a JSON array.
 """
+    
     try:
         print("📨 [LTM-EXTRACT] Calling LLM")
         llm_response = await bedrock_structured_llm_call(
             system_prompt=system_prompt, 
             user_prompt=user_prompt, 
-            output_structure=LTMFactList,
+            output_structure=LTMMemoryExtractionBatch,
             model_dump=True)
         
         
-        # print("[LTM-EXTRACT-RESPONSE]_type   ", type(llm_response))
+        print("[LTM-EXTRACT-RESPONSE]   ", llm_response)
         extracted = llm_response.get("facts",[])
         print("[LTM-EXTRACTED-FACTS]   ", extracted)
-        # try:
-        #     extracted = json.loads(llm_response)
-        # except Exception:
-        #     print("❌ [LTM-EXTRACT] Invalid JSON from LLM")
-        #     print(llm_response)
-        #     return []
-
+        
         if not isinstance(extracted, list):
             print("❌ [LTM-EXTRACT] LLM output is not a list")
             return []
