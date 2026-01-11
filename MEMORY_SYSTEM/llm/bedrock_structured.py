@@ -49,7 +49,7 @@ async def bedrock_structured_llm_call(
     if response is None:
         return {"error": "bedrock returned null response"}
 
-    print("agent_response_type", response)
+    # print("agent_response_type", response)
     if model_dump==True:
         extracted = response.model_dump() 
         return extracted

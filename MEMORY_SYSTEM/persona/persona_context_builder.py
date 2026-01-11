@@ -369,6 +369,5 @@ async def build_persona_context(
         return ""
 
     return (
-        "USER CONTEXT:\n"
-        + "\n".join(f"- {line}" for line in context_lines)
+        "\n".join(f"- {line}" for line in context_lines)
     )

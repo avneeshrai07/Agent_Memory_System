@@ -15,22 +15,22 @@ from typing import List
 import asyncio
 from MEMORY_SYSTEM.runtime.background_worker import background_worker
 from MEMORY_SYSTEM.database.schema.memories import ensure_memories_table_exists
-from MEMORY_SYSTEM.database.schema.memory_access_log import ensure_memory_access_log_table_exists
+# from MEMORY_SYSTEM.database.schema.memory_access_log import ensure_memory_access_log_table_exists
 from MEMORY_SYSTEM.database.schema.memory_events import ensure_memory_events_table_exists
-from MEMORY_SYSTEM.database.schema.memory_links import ensure_memory_links_table_exists
-from MEMORY_SYSTEM.database.schema.memory_snapshots import ensure_memory_snapshots_table_exists
+# from MEMORY_SYSTEM.database.schema.memory_links import ensure_memory_links_table_exists
+# from MEMORY_SYSTEM.database.schema.memory_snapshots import ensure_memory_snapshots_table_exists
 from MEMORY_SYSTEM.database.schema.user_persona import ensure_user_persona_table_exists
 from MEMORY_SYSTEM.database.schema.pattern_logs import ensure_pattern_logs_table_exists
-
+from MEMORY_SYSTEM.main import bedrock_llm_call
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         await ensure_memories_table_exists()
-        await ensure_memory_access_log_table_exists()
+        # await ensure_memory_access_log_table_exists()
         await ensure_memory_events_table_exists()
-        await ensure_memory_links_table_exists()
-        await ensure_memory_snapshots_table_exists()
+        # await ensure_memory_links_table_exists()
+        # await ensure_memory_snapshots_table_exists()
         await ensure_user_persona_table_exists()
         await ensure_pattern_logs_table_exists()
     except Exception as e:
@@ -89,8 +89,8 @@ async def newsreports(request: Request):
         system_prompt = data.get("system_prompt",None)
         user_prompt = data.get("user_prompt", None)  
         context = None
-        # result = await bedrock_llm(user_id, system_prompt,user_prompt, context)
-        return {"hello world"}
+        result = await bedrock_llm_call(user_id, system_prompt,user_prompt)
+        return result
     except Exception as e:
         tb = traceback.format_exc()
         return JSONResponse(

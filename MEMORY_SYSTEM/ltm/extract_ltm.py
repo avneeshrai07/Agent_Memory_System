@@ -79,9 +79,10 @@ For each candidate fact, return:
             output_structure=LTMFactList,
             model_dump=True)
         
-        print("[LTM-EXTRACT-RESPONSE]   ", llm_response)
-        print("[LTM-EXTRACT-RESPONSE]_type   ", type(llm_response))
+        
+        # print("[LTM-EXTRACT-RESPONSE]_type   ", type(llm_response))
         extracted = llm_response.get("facts",[])
+        print("[LTM-EXTRACTED-FACTS]   ", extracted)
         # try:
         #     extracted = json.loads(llm_response)
         # except Exception:

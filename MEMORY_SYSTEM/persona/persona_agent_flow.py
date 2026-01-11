@@ -88,15 +88,14 @@ async def call_llm(system_prompt: str, user_prompt: str) -> str:
 # MAIN ORCHESTRATION
 # -------------------------------------------------------------------
 
-async def build_user_persona_system_prompt(
-    user_id: str,
-    system_prompt: str
+async def bring_user_persona(
+    user_id: str
 ) -> str:
     """
     Build and return a persona-aware system prompt.
     """
 
-    print("\n================ PERSONA CREATION FLOW START ================\n")
+    print(" >>> PERSONA CREATION FLOW START")
     print("[flow] user_id:", user_id)
 
     try:
@@ -108,21 +107,10 @@ async def build_user_persona_system_prompt(
 
         if persona_context:
             print("\n[flow] persona context loaded:")
-            print(persona_context)
+            return persona_context
         else:
             print("\n[flow] no persona context found")
-
-        personalised_system_prompt = f"""
-        {system_prompt}
-
-        The following describes the user's writing preferences and communication constraints:
-        {persona_context}
-                """.strip()
-
-        print("\n================ PERSONA CREATION FLOW END ================\n")
-
-        # ✅ RETURN HERE — NOTHING ELSE
-        return personalised_system_prompt
+            return ""
 
     except Exception:
         print("\n[flow] ERROR OCCURRED")
@@ -210,28 +198,30 @@ def print_persona_human_readable(persona, flush=True):
 # ------------------------------------------------------
 # persona/persona_agent_flow.py
 
-async def learn_persona_from_interaction(user_id: str, user_prompt: str):
+async def learn_persona_from_interaction(user_id: str, user_prompt: str) -> None:
     print(">>> ENTER learn_persona_from_interaction", flush=True)
 
     try:
         extracted_persona = await persona_extractor_function(user_prompt)
         print("extracted_persona:", extracted_persona, flush=True)
 
-        signals = persona_to_signals(extracted_persona)
-        # print("signals_Evidence:", signals, flush=True)
+        # 🔒 HARD GUARD
+        if extracted_persona is None:
+            print("ℹ️ No persona extracted from this interaction", flush=True)
+            return
 
+        signals = persona_to_signals(extracted_persona)
         signals = await enrich_signal_frequency(user_id, signals)
-        
 
         print(">>> ABOUT TO RUN COGNITION", flush=True)
         decisions = await run_cognition(user_id, signals)
         print_signals_with_decisions(signals, decisions)
 
         filtered_persona = project_persona_by_decisions(extracted_persona, decisions)
-        print("\n================ FILTERED PERSONA ================\n")
-        print_persona_human_readable(filtered_persona)
 
+        print("\n================ FILTERED PERSONA ================\n", flush=True)
         if filtered_persona:
+            print_persona_human_readable(filtered_persona)
             print(">>> ABOUT TO UPDATE DB", flush=True)
             await update_user_persona(user_id, filtered_persona)
             print(">>> DB UPDATED", flush=True)
@@ -240,5 +230,7 @@ async def learn_persona_from_interaction(user_id: str, user_prompt: str):
 
     except Exception as e:
         print("❌ persona learner crashed:", e, flush=True)
+        traceback.print_exc()
 
-    print("<<< EXIT learn_persona_from_interaction", flush=True)
+    finally:
+        print("<<< EXIT learn_persona_from_interaction", flush=True)

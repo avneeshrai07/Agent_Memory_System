@@ -18,7 +18,7 @@ load_dotenv()
 
 from MEMORY_SYSTEM.runtime.background_worker import submit_background_task
 from MEMORY_SYSTEM.context.build_cognition_context import build_epistemic_system_prompt
-from MEMORY_SYSTEM.persona.persona_agent_flow import build_user_persona_system_prompt
+from MEMORY_SYSTEM.persona.persona_agent_flow import bring_user_persona
 from MEMORY_SYSTEM.persona.persona_agent_flow import learn_persona_from_interaction
 from MEMORY_SYSTEM.ltm.extract_ltm import extract_ltm_facts
 from MEMORY_SYSTEM.ltm.retriever import retrieve_ltm_memories
@@ -66,21 +66,45 @@ llm = ChatBedrock(
 
 async def bedrock_llm_call(
     user_id: str,
-    base_system_prompt: str,
+    system_prompt: str,
     user_prompt: str
 ):
     try:
-        try:
-            epistemic_system_prompt = build_epistemic_system_prompt(base_system_prompt)
-            final_system_prompt = await build_user_persona_system_prompt(user_id, epistemic_system_prompt)
-        except Exception:
-            final_system_prompt = base_system_prompt
+        print("\n\n===================SYSTEM PROMPT START===================\n\n")
+        print(system_prompt)
+        print("\n\n===================SYSTEM PROMPT END===================\n\n")
 
+        print("\n\n===================USER PROMPT START===================\n\n")
+        print(user_prompt)
+        print("\n\n===================USER PROMPT END===================\n\n")
+
+        try:
+            epistemic_system_prompt = build_epistemic_system_prompt(system_prompt)
+            print("\n\n===================EPISTEMIC SYSTEM PROMPT START===================\n\n")
+            print(epistemic_system_prompt)
+            print("\n\n===================EPISTEMIC SYSTEM PROMPT END===================\n\n")
+            user_persona = await bring_user_persona(user_id)
+            print("\n\n===================USER PERSONA START===================\n\n")
+            print(user_persona)
+            print("\n\n===================USER PERSONA END===================\n\n")
+
+            final_system_prompt = f"""
+            RULES:
+            {epistemic_system_prompt}
+
+            USER_PERSONA:
+            {user_persona}
+"""
+        except Exception:
+            final_system_prompt = system_prompt
 
 
         try:
             memories = await retrieve_ltm_memories(user_id, user_prompt)
             ltm_context = build_ltm_context(memories)
+            print("\n\n===================LONG TERMS MEMORIES START===================\n\n")
+            print(ltm_context)
+            print("\n\n===================LONG TERM MEMORIES END===================\n\n")
 
             final_user_prompt = f"""
             {ltm_context}
@@ -91,12 +115,13 @@ async def bedrock_llm_call(
         except Exception:
             final_user_prompt = user_prompt
 
-        
+
         print("#"*40)
         print("final_system_prompt:  ",final_system_prompt)
         print("*"*40)
         print("final_user_prompt:  ",final_user_prompt)
         print("#"*40)
+
 
         # structured_llm = llm.with_structured_output(persona_model)
 
@@ -111,8 +136,9 @@ async def bedrock_llm_call(
         # --------------------------------------------------
         # BACKGROUND PERSONA LEARNING (NON-BLOCKING)
         # --------------------------------------------------
+        # If you await a function, it must NOT be submitted to background
         submit_background_task(
-            await learn_persona_from_interaction(user_id, user_prompt)
+            learn_persona_from_interaction(user_id, user_prompt)
         )
 
         if response is None:
@@ -124,7 +150,7 @@ async def bedrock_llm_call(
         agent_response_content = agent_response.get('content')
 
         submit_background_task(
-            await extract_ltm_facts(user_id, user_prompt, agent_response_content)
+            extract_ltm_facts(user_id, user_prompt, agent_response_content)
         )
         # print("agent_response_type", agent_response)
         return agent_response_content
@@ -143,7 +169,7 @@ async def bedrock_llm_call(
 
 if __name__ == "__main__":
     user_id="test_user_011"
-    system_prmopt = """
+    system_prompt = """
     You are a professional AI writing assistant.
 """
 
@@ -181,7 +207,7 @@ Overall, many of these things are tentative, and I expect they might change as I
     asyncio.run(
         bedrock_llm_call(
             user_id,
-            system_prmopt,
+            system_prompt,
             user_prompt
         )
     )
