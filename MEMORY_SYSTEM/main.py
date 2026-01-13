@@ -23,6 +23,7 @@ from MEMORY_SYSTEM.persona.persona_agent_flow import learn_persona_from_interact
 from MEMORY_SYSTEM.ltm.extract_ltm import extract_ltm_facts
 from MEMORY_SYSTEM.ltm.retriever import retrieve_ltm_memories
 from MEMORY_SYSTEM.ltm.context_builder import build_ltm_context
+from MEMORY_SYSTEM.stm.stm_orchestrator import process_user_message
 import traceback
 from langchain_aws import ChatBedrock
 
@@ -78,6 +79,11 @@ async def bedrock_llm_call(
         print(user_prompt)
         print("\n\n===================USER PROMPT END===================\n\n")
 
+        result = await process_user_message(
+        user_id,
+        user_prompt
+    )
+        print("result:  ", result)
         try:
             epistemic_system_prompt = build_epistemic_system_prompt(system_prompt)
             print("\n\n===================EPISTEMIC SYSTEM PROMPT START===================\n\n")
@@ -180,19 +186,7 @@ if __name__ == "__main__":
 """
 
     user_prompt="""
-    I’m not completely sure how to describe myself yet, but I’ll try.
-
-I think I’m mostly an individual developer, though sometimes I also feel more like a system architect. I’ve worked with software for a while now — maybe around 8–10 years — but I don’t always work in the same area.
-
-Lately, I’ve been experimenting with AI-related things, especially around agents and memory, but I wouldn’t say I’m an expert. I’m still figuring things out and learning as I go.
-
-I might be working on something like a startup, or at least an early-stage project. It’s not a formal company yet, and a lot of details like company size or industry are still unclear.
-
-My main goal right now is mostly to explore and understand how AI agent systems work, and maybe try implementing some ideas if they make sense. I don’t have very strict success criteria yet — it’s more about learning than achieving a specific outcome.
-
-If I create content, it’s usually for developers like me, but again, that’s not fixed. The tone I prefer is generally technical, but I’m flexible and still experimenting with what works best.
-
-Overall, many of these things are tentative, and I expect they might change as I learn more.
+    Let’s focus only on the email campaign and drop meetings.
 """
 #     user_prompt = """
 # write it in bullet points and keep it short
