@@ -180,13 +180,13 @@ async def bedrock_llm_call(
 # -------------------------------------------------------------------
 
 if __name__ == "__main__":
-    user_id="test_user_011"
+    user_id="570bfbe7-5474-4856-bf99-d5fac4b885a2"
     system_prompt = """
     You are a professional AI writing assistant.
 """
 
     user_prompt="""
-    Let’s focus only on the email campaign and drop meetings.
+    Maybe we can try emails first.
 """
 #     user_prompt = """
 # write it in bullet points and keep it short

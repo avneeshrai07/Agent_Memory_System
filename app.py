@@ -18,7 +18,7 @@ from MEMORY_SYSTEM.database.schema.memories import ensure_memories_table_exists
 # from MEMORY_SYSTEM.database.schema.memory_access_log import ensure_memory_access_log_table_exists
 from MEMORY_SYSTEM.database.schema.memory_events import ensure_memory_events_table_exists
 # from MEMORY_SYSTEM.database.schema.memory_links import ensure_memory_links_table_exists
-# from MEMORY_SYSTEM.database.schema.memory_snapshots import ensure_memory_snapshots_table_exists
+from MEMORY_SYSTEM.database.schema.stm_entries import ensure_stm_entries_table_exists
 from MEMORY_SYSTEM.database.schema.user_persona import ensure_user_persona_table_exists
 from MEMORY_SYSTEM.database.schema.pattern_logs import ensure_pattern_logs_table_exists
 from MEMORY_SYSTEM.main import bedrock_llm_call
@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
         # await ensure_memory_access_log_table_exists()
         await ensure_memory_events_table_exists()
         # await ensure_memory_links_table_exists()
-        # await ensure_memory_snapshots_table_exists()
+        await ensure_stm_entries_table_exists()
         await ensure_user_persona_table_exists()
         await ensure_pattern_logs_table_exists()
     except Exception as e:
