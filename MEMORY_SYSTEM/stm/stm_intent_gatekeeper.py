@@ -1,25 +1,31 @@
-# from MEMORY_SYSTEM.stm.stm_intent import STMIntent
-
-
 def approve_stm_intent(intent: dict) -> bool:
     try:
         print("[STM_GATE] Validating STM intent")
 
-        if not intent["should_write"]:
-            intent["state_type"] = None
-            intent["statement"] = None
+        # 1. Must be an instruction
+        if not intent.get("should_write"):
             print("[STM_GATE] Rejected: should_write = false")
             return False
 
-        if not intent["state_type"] or not intent["statement"]:
+        # 2. Must specify what changed
+        if not intent.get("state_type") or not intent.get("statement"):
             print("[STM_GATE] Rejected: missing state_type or statement")
             return False
 
-        if intent["confidence"] is None or intent["confidence"] < 0.85:
-            print("[STM_GATE] Rejected: confidence too low")
+        # 3. Confidence threshold (soft truth allowed)
+        confidence = intent.get("confidence")
+        if confidence is None:
+            print("[STM_GATE] Rejected: confidence missing")
             return False
 
-        print("[STM_GATE] Intent approved")
+        if confidence < 0.6:
+            print(f"[STM_GATE] Rejected: confidence too low ({confidence})")
+            return False
+
+        print(
+            f"[STM_GATE] Approved STM intent "
+            f"(confidence={confidence})"
+        )
         return True
 
     except Exception as e:

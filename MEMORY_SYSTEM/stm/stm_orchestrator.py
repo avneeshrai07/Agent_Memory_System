@@ -1,6 +1,8 @@
 from MEMORY_SYSTEM.stm.stm_prompt import stm_intent_extractor_function
 from MEMORY_SYSTEM.stm.stm_intent_gatekeeper import approve_stm_intent
 from MEMORY_SYSTEM.stm.stm_repository import commit_stm_intent
+
+
 async def process_user_message(
     user_id: str,
     message: str
@@ -18,31 +20,42 @@ async def process_user_message(
         # ----------------------------------
         intent = await stm_intent_extractor_function(message)
 
-        print("[ORCHESTRATOR] LLM intent:", intent)
+        stm_intent = intent["stm"]
+        route_intent = intent["route"]
+
+        print("[ORCHESTRATOR] STM intent:", stm_intent)
+        print("[ORCHESTRATOR] Route intent:", route_intent)
 
         # ----------------------------------
-        # 2. Gatekeeper (authority decision)
+        # 2. Routing decision (ALWAYS)
         # ----------------------------------
-        if not approve_stm_intent(intent):
+        route = route_intent["route"]
+        route_confidence = route_intent["confidence"]
+
+        # ----------------------------------
+        # 3. STM gatekeeper (CONDITIONAL)
+        # ----------------------------------
+        stm_entry = None
+
+        if approve_stm_intent(stm_intent):
+            print("[ORCHESTRATOR] STM write approved")
+
+            stm_entry = await commit_stm_intent(
+                user_id=user_id,
+                intent=stm_intent
+            )
+
+            print("[ORCHESTRATOR] STM updated:", stm_entry["stm_id"])
+        else:
             print("[ORCHESTRATOR] STM write rejected by gatekeeper")
-            return {
-                "stm_written": False,
-                "stm_entry": None,
-                "raw_message": message
-            }
 
         # ----------------------------------
-        # 3. STM commit (authoritative)
+        # 4. Return full orchestration result
         # ----------------------------------
-        stm_entry = await commit_stm_intent(
-            user_id=user_id,
-            intent=intent,
-        )
-
-        print("[ORCHESTRATOR] STM updated:", stm_entry["stm_id"])
-
         return {
-            "stm_written": True,
+            "route": route,
+            "route_confidence": route_confidence,
+            "stm_written": stm_entry is not None,
             "stm_entry": stm_entry,
             "raw_message": message
         }

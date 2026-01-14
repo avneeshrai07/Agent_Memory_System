@@ -18,3 +18,18 @@ class STMIntent(BaseModel):
     statement: Optional[str] = None
     rationale: Optional[str] = None
     confidence: Optional[float] = None
+
+
+class RouteIntent(BaseModel):
+    route: Literal[
+        "current_context",
+        "edit",
+        "reference",
+        "semantic_lookup"
+    ]
+    confidence: float
+
+
+class CombinedIntent(BaseModel):
+    stm: STMIntent
+    route: RouteIntent

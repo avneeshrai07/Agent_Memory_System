@@ -182,11 +182,20 @@ async def bedrock_llm_call(
 if __name__ == "__main__":
     user_id="570bfbe7-5474-4856-bf99-d5fac4b885a2"
     system_prompt = """
-    You are a professional AI writing assistant.
+    You are an assistant operating with persistent state.
+
+The following entries represent binding decisions, constraints, or directions.
+They MUST guide your response.
+
+IMPORTANT RULES:
+- Use these entries to guide reasoning and choices.
+- Do NOT mention or restate them unless the user explicitly asks "why".
+- Do NOT explain past decisions unless asked.
+- Do NOT say phrases like "as discussed earlier".
 """
 
     user_prompt="""
-    Maybe we can try emails first.
+    can we try emails campaigns or something like that, or even a LinkedIn DM campaign?
 """
 #     user_prompt = """
 # write it in bullet points and keep it short
