@@ -36,7 +36,7 @@ Artifact ID: {artifact_id}
     print("[S3 TEST] content_ref:", content_ref)
 
     assert content_ref.startswith(
-        "s3://memory-artifact-storage-old/artifacts/"
+        "s3://{S3_bucket_name}/artifacts/"
     )
     assert artifact_id in content_ref
     assert content_ref.endswith(".md")

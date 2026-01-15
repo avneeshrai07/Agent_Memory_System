@@ -1,20 +1,28 @@
-# MEMORY_SYSTEM/runtime/background_worker.py
-
 import asyncio
 import traceback
-from typing import Coroutine, Any
+from typing import Callable, Awaitable, Optional
 
-_task_queue: asyncio.Queue[Coroutine[Any, Any, None]] = asyncio.Queue()
+_task_queue: Optional[asyncio.Queue] = None
+_worker_started = False
 
 
 async def background_worker():
-    print("🟢 Background worker started", flush=True)
+    assert _task_queue is not None
+
+    print(
+        "🟢 Background worker started",
+        "loop =", id(asyncio.get_running_loop()),
+        "queue =", id(_task_queue),
+        flush=True,
+    )
 
     while True:
-        coro = await _task_queue.get()
+        task_factory = await _task_queue.get()
+
         try:
+            coro = task_factory()
             if not asyncio.iscoroutine(coro):
-                raise TypeError(f"Invalid task enqueued: {coro}")
+                raise TypeError("Background task factory did not return coroutine")
 
             print("⚙️ Running background task", flush=True)
             await coro
@@ -27,9 +35,26 @@ async def background_worker():
             _task_queue.task_done()
 
 
-def submit_background_task(coro: Coroutine[Any, Any, None]) -> None:
-    if not asyncio.iscoroutine(coro):
-        raise TypeError(
-            f"submit_background_task expects coroutine, got {type(coro)}"
-        )
-    _task_queue.put_nowait(coro)
+async def start_background_worker():
+    global _task_queue, _worker_started
+
+    if _worker_started:
+        return
+
+    _task_queue = asyncio.Queue()
+    asyncio.create_task(background_worker())
+    _worker_started = True
+
+
+def submit_background_task(task_factory: Callable[[], Awaitable[None]]) -> None:
+    if _task_queue is None:
+        raise RuntimeError("Background worker not initialized")
+
+    print(
+        "[BG SUBMIT]",
+        "loop =", id(asyncio.get_running_loop()),
+        "queue =", id(_task_queue),
+        flush=True,
+    )
+
+    _task_queue.put_nowait(task_factory)

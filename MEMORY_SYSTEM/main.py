@@ -15,7 +15,7 @@ import traceback
 
 from dotenv import load_dotenv
 load_dotenv()
-
+from fastapi import BackgroundTasks
 from MEMORY_SYSTEM.runtime.background_worker import submit_background_task
 from MEMORY_SYSTEM.context.build_cognition_context import build_epistemic_system_prompt
 from MEMORY_SYSTEM.persona.persona_agent_flow import bring_user_persona
@@ -23,7 +23,8 @@ from MEMORY_SYSTEM.persona.persona_agent_flow import learn_persona_from_interact
 from MEMORY_SYSTEM.ltm.extract_ltm import extract_ltm_facts
 from MEMORY_SYSTEM.ltm.retriever import retrieve_ltm_memories
 from MEMORY_SYSTEM.ltm.context_builder import build_ltm_context
-from MEMORY_SYSTEM.stm.stm_orchestrator import process_user_message
+from MEMORY_SYSTEM.stm.stm_orchestrator import process_user_message, post_model_response
+
 import traceback
 from langchain_aws import ChatBedrock
 
@@ -47,6 +48,12 @@ def register_task(task: asyncio.Task) -> None:
 
     task.add_done_callback(_cleanup)
 
+def safe_bg(task_name: str, factory):
+    def _wrapped():
+        # This returns the coroutine directly, not awaiting it
+        return factory()  # Problem: worker expects this to be a coroutine
+    return _wrapped
+
 
 # -------------------------------------------------------------------
 #  # BEDROCK INITIALIZATION 
@@ -68,7 +75,8 @@ llm = ChatBedrock(
 async def bedrock_llm_call(
     user_id: str,
     system_prompt: str,
-    user_prompt: str
+    user_prompt: str,
+    background_tasks: BackgroundTasks
 ):
     try:
         print("\n\n===================SYSTEM PROMPT START===================\n\n")
@@ -79,11 +87,11 @@ async def bedrock_llm_call(
         print(user_prompt)
         print("\n\n===================USER PROMPT END===================\n\n")
 
-        result = await process_user_message(
+        user_intent = await process_user_message(
         user_id,
         user_prompt
     )
-        print("result:  ", result)
+        print("user_intent:  ", user_intent)
         try:
             epistemic_system_prompt = build_epistemic_system_prompt(system_prompt)
             print("\n\n===================EPISTEMIC SYSTEM PROMPT START===================\n\n")
@@ -149,9 +157,7 @@ async def bedrock_llm_call(
         # BACKGROUND PERSONA LEARNING (NON-BLOCKING)
         # --------------------------------------------------
         # If you await a function, it must NOT be submitted to background
-        submit_background_task(
-            learn_persona_from_interaction(user_id, user_prompt)
-        )
+        
 
         if response is None:
             return {"error": "bedrock returned null response"}
@@ -161,10 +167,28 @@ async def bedrock_llm_call(
         print(agent_response.get('content'))
         agent_response_content = agent_response.get('content')
 
-        submit_background_task(
-            extract_ltm_facts(user_id, user_prompt, agent_response_content)
+        background_tasks.add_task(
+            post_model_response,
+            user_id=user_id,
+            route=user_intent["route"],
+            route_confidence=user_intent["route_confidence"],
+            stm_written=user_intent["stm_written"],
+            response_text=agent_response_content
         )
-        # print("agent_response_type", agent_response)
+        
+        background_tasks.add_task(
+            learn_persona_from_interaction,
+            user_id,
+            user_prompt
+        )
+        
+        background_tasks.add_task(
+            extract_ltm_facts,
+            user_id,
+            user_prompt,
+            agent_response_content
+        )
+
         return agent_response_content
 
     except Exception as e:
@@ -182,41 +206,10 @@ async def bedrock_llm_call(
 if __name__ == "__main__":
     user_id="570bfbe7-5474-4856-bf99-d5fac4b885a2"
     system_prompt = """
-    You are an assistant operating with persistent state.
-
-The following entries represent binding decisions, constraints, or directions.
-They MUST guide your response.
-
-IMPORTANT RULES:
-- Use these entries to guide reasoning and choices.
-- Do NOT mention or restate them unless the user explicitly asks "why".
-- Do NOT explain past decisions unless asked.
-- Do NOT say phrases like "as discussed earlier".
+    
 """
 
     user_prompt="""
-    can we try emails campaigns or something like that, or even a LinkedIn DM campaign?
+    Create a fresh new email for me, which follows to the leads of FMCG companies
 """
-#     user_prompt = """
-# write it in bullet points and keep it short
-# """
-    # user_prompt = """
-    # i am a lead software developer at orbitaim, write the email again
-    # """
 
-    # user_prompt = """
-    # i am a lead software developer at orbitaim, write the email again
-    # """
-#     user_prompt = """
-#     keep emails short and in bullet points like before but add more action items
-# """
-#     user_prompt = """
-#     I am Avneesh rai a software developer at orbitaim, write a blog for me
-# """
-    asyncio.run(
-        bedrock_llm_call(
-            user_id,
-            system_prompt,
-            user_prompt
-        )
-    )

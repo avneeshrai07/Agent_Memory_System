@@ -3,7 +3,7 @@ from MEMORY_SYSTEM.database.connect.connect import db_manager
 
 async def ensure_stm_entries_table_exists() -> None:
     try:
-        print("[STM_INIT] Starting STM table initialization")
+        # print("[STM_INIT] Starting STM table initialization")
 
         pool = await db_manager.get_pool()
         async with pool.acquire() as conn:
@@ -11,7 +11,7 @@ async def ensure_stm_entries_table_exists() -> None:
             # -------------------------------------------------
             # Core schema setup
             # -------------------------------------------------
-            print("[STM_INIT] Ensuring base schemas and extensions")
+            # print("[STM_INIT] Ensuring base schemas and extensions")
 
             await conn.execute("CREATE SCHEMA IF NOT EXISTS public;")
             await conn.execute("SET search_path TO public;")
@@ -27,7 +27,7 @@ async def ensure_stm_entries_table_exists() -> None:
                 "CREATE SCHEMA IF NOT EXISTS agentic_memory_schema;"
             )
 
-            print("[STM_INIT] Creating STM entries table")
+            # print("[STM_INIT] Creating STM entries table")
 
             # -------------------------------------------------
             # STM = State Memory (authoritative decisions)
@@ -69,7 +69,7 @@ async def ensure_stm_entries_table_exists() -> None:
                 """
             )
 
-            print("[STM_INIT] Creating STM indexes")
+            # print("[STM_INIT] Creating STM indexes")
 
             # Active STM per user (hot path)
             await conn.execute(

@@ -44,10 +44,10 @@ async def ensure_memory_events_table_exists() -> None:
             )
 
             await conn.execute(
-                "CREATE INDEX idx_memory_events_memory ON agentic_memory_schema.memory_events(memory_id);"
+                "CREATE INDEX IF NOT EXISTS idx_memory_events_memory ON agentic_memory_schema.memory_events(memory_id);"
             )
             await conn.execute(
-                "CREATE INDEX idx_memory_events_type ON agentic_memory_schema.memory_events(event_type);"
+                "CREATE INDEX IF NOT EXISTS idx_memory_events_type ON agentic_memory_schema.memory_events(event_type);"
             )
 
             print("✅ canonical memory_events table created successfully")

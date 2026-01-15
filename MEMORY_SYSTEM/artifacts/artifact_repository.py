@@ -3,64 +3,51 @@ from datetime import datetime
 import uuid
 
 from MEMORY_SYSTEM.database.connect.connect import db_manager
-
+from datetime import datetime, timezone
+import json  
 
 class ArtifactRepository:
     def __init__(self):
-        self.schema = "agentic_memory_schema"
-        self.table = "artifacts"
+        pass
 
-    async def create_artifact(
-        self,
-        *,
-        artifact_type: str,
-        summary: str,
-        metadata: Optional[Dict[str, Any]],
-        content_ref: str,
-    ) -> Dict[str, Any]:
-        """
-        Create a new artifact metadata record.
-        """
+
+
+    async def create_artifact(self, *, artifact_type: str, summary: str, metadata: Optional[Dict[str, Any]], content_ref: str) -> Dict[str, Any]:
         try:
             pool = await db_manager.get_pool()
             artifact_id = uuid.uuid4()
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
             async with pool.acquire() as conn:
                 await conn.execute(
-                    f"""
-                    INSERT INTO {self.schema}.{self.table} (
-                        artifact_id,
-                        artifact_type,
-                        summary,
-                        metadata,
-                        content_ref,
-                        created_at,
-                        last_updated_at
+                    """
+                    INSERT INTO agentic_memory_schema.artifacts (
+                        artifact_id, artifact_type, summary, metadata, 
+                        content_ref, created_at, last_updated_at
                     )
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
                     """,
-                    artifact_id,
-                    artifact_type,
-                    summary,
-                    metadata or {},
-                    content_ref,
-                    now,
-                    now,
+                    artifact_id, artifact_type, summary, 
+                    json.dumps(metadata or {}),  # ← FIX: Convert dict to JSON string
+                    content_ref, now, now
                 )
-
+            
             return {
                 "artifact_id": str(artifact_id),
                 "artifact_type": artifact_type,
                 "summary": summary,
-                "metadata": metadata or {},
+                "metadata": metadata or {},  # Return original dict for app use
                 "content_ref": content_ref,
                 "created_at": now,
                 "last_updated_at": now,
             }
-
         except Exception as e:
-            raise RuntimeError("Failed to create artifact") from e
+            import traceback
+            print(f"[ARTIFACT CREATE ERROR] {e}")
+            print(f"[ARTIFACT TRACEBACK] {traceback.format_exc()}")
+            raise RuntimeError(f"Failed to create artifact: {str(e)}") from e
+
+
 
     async def get_artifact(
         self,

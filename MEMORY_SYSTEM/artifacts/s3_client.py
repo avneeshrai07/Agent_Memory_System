@@ -13,7 +13,7 @@ AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "ap-south-1")
 
 class ArtifactS3Client:
     def __init__(self, bucket: str):
-        self.bucket = "memory-artifact-storage-old"
+        self.bucket = bucket
 
         # Explicit credentials (same pattern as your reference)
         self.s3 = boto3.client(

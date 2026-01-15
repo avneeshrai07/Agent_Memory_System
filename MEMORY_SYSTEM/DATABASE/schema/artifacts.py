@@ -11,22 +11,18 @@ async def ensure_artifacts_table_exists() -> None:
                 "CREATE SCHEMA IF NOT EXISTS agentic_memory_schema;"
             )
 
-            await conn.execute(
-                """
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS agentic_memory_schema.artifacts (
                     artifact_id UUID PRIMARY KEY,
                     artifact_type TEXT NOT NULL,
-
                     summary TEXT NOT NULL,
                     metadata JSONB,
-
                     content_ref TEXT NOT NULL,
-
-                    created_at TIMESTAMP NOT NULL,
-                    last_updated_at TIMESTAMP NOT NULL
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    last_updated_at TIMESTAMP WITH TIME ZONE NOT NULL
                 );
-                """
-            )
+            """)
+            
 
             await conn.execute(
                 """

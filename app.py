@@ -13,11 +13,12 @@ from datetime import datetime
 import pytz
 from typing import List
 import asyncio
-from MEMORY_SYSTEM.runtime.background_worker import background_worker
+from fastapi import BackgroundTasks
+from MEMORY_SYSTEM.runtime.background_worker import start_background_worker
 from MEMORY_SYSTEM.database.schema.memories import ensure_memories_table_exists
 # from MEMORY_SYSTEM.database.schema.memory_access_log import ensure_memory_access_log_table_exists
 from MEMORY_SYSTEM.database.schema.memory_events import ensure_memory_events_table_exists
-# from MEMORY_SYSTEM.database.schema.memory_links import ensure_memory_links_table_exists
+from MEMORY_SYSTEM.database.schema.artifacts import ensure_artifacts_table_exists
 from MEMORY_SYSTEM.database.schema.stm_entries import ensure_stm_entries_table_exists
 from MEMORY_SYSTEM.database.schema.user_persona import ensure_user_persona_table_exists
 from MEMORY_SYSTEM.database.schema.pattern_logs import ensure_pattern_logs_table_exists
@@ -27,17 +28,16 @@ from MEMORY_SYSTEM.main import bedrock_llm_call
 async def lifespan(app: FastAPI):
     try:
         await ensure_memories_table_exists()
-        # await ensure_memory_access_log_table_exists()
         await ensure_memory_events_table_exists()
-        # await ensure_memory_links_table_exists()
         await ensure_stm_entries_table_exists()
         await ensure_user_persona_table_exists()
         await ensure_pattern_logs_table_exists()
+        await ensure_artifacts_table_exists()
     except Exception as e:
         raise
 
     try:
-        asyncio.create_task(background_worker())
+        await start_background_worker()
     except Exception as e:
         raise
 
@@ -82,25 +82,29 @@ def home():
 
 
 @app.post('/model')
-async def newsreports(request: Request):
+async def newsreports(
+    request: Request, 
+    background_tasks: BackgroundTasks  # ← ADD THIS DEPENDENCY
+):
     try:
         data = await request.json()
-        user_id = data.get("user_id",None)
-        system_prompt = data.get("system_prompt",None)
+        user_id = data.get("user_id", None)
+        system_prompt = data.get("system_prompt", None)
         user_prompt = data.get("user_prompt", None)  
-        context = None
-        result = await bedrock_llm_call(user_id, system_prompt,user_prompt)
+        
+        result = await bedrock_llm_call(
+            user_id, 
+            system_prompt, 
+            user_prompt, 
+            background_tasks=background_tasks  # ← PASS THE INJECTED INSTANCE
+        )
         return result
     except Exception as e:
         tb = traceback.format_exc()
         return JSONResponse(
             status_code=500,
-            content={
-                "error": str(e),
-                "traceback": tb.splitlines()
-            }
+            content={"error": str(e), "traceback": tb.splitlines()}
         )
-
 
 
 if __name__ == "__main__":
