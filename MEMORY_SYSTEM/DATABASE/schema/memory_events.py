@@ -9,13 +9,12 @@ async def ensure_memory_events_table_exists() -> None:
             await conn.execute("SET search_path TO public;")
             await conn.execute("CREATE SCHEMA IF NOT EXISTS agentic_memory_schema;")
 
-            # DROP old table completely (aligned with new LTM)
-            await conn.execute("DROP TABLE IF EXISTS agentic_memory_schema.memory_events CASCADE;")
+
 
             # Memory event log (signals, reinforcement, consolidation trace)
             await conn.execute(
                 """
-                CREATE TABLE agentic_memory_schema.memory_events (
+                CREATE TABLE IF NOT EXISTS agentic_memory_schema.memory_events (
                     event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
                     memory_id UUID NOT NULL

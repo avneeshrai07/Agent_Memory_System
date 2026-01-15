@@ -1,7 +1,14 @@
 from MEMORY_SYSTEM.stm.stm_prompt import stm_intent_extractor_function
 from MEMORY_SYSTEM.stm.stm_intent_gatekeeper import approve_stm_intent
 from MEMORY_SYSTEM.stm.stm_repository import commit_stm_intent
+from MEMORY_SYSTEM.retrieval.router_executor import execute_route
+from MEMORY_SYSTEM.storage.message_store import MessageStore
+from MEMORY_SYSTEM.storage.stm_store import STMStore
+from MEMORY_SYSTEM.artifacts.artifact_repository import ArtifactStore
 
+message_store = MessageStore()
+stm_store = STMStore()
+artifact_store = ArtifactStore()
 
 async def process_user_message(
     user_id: str,
@@ -52,6 +59,15 @@ async def process_user_message(
         # ----------------------------------
         # 4. Return full orchestration result
         # ----------------------------------
+        retrieval_result = await execute_route(
+            route=route,
+            user_id=user_id,
+            session_id="session-1",  # or pass it properly
+            stm_store=stm_store,
+            artifact_store=artifact_store,
+        )
+
+        print("[ORCHESTRATOR] Retrieval mode:", retrieval_result["mode"])
         return {
             "route": route,
             "route_confidence": route_confidence,
