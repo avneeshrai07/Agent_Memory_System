@@ -2,7 +2,7 @@
 
 from typing import Dict, Any, Optional
 from MEMORY_SYSTEM.llm.bedrock_structured import bedrock_structured_llm_call
-from MEMORY_SYSTEM.stm.stm_facts_schema import STMContext
+from MEMORY_SYSTEM.stm.stm_models import STMContext
 
 
 async def extract_STM_facts(
