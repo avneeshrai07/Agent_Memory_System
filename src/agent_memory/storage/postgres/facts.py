@@ -6,6 +6,7 @@ conformance is duck-typed, no explicit inheritance required.
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 import asyncpg
@@ -100,6 +101,44 @@ class PostgresFactStore:
                 fact.last_reinforced_at,
             )
         return fact
+
+    async def delete_fact(self, fact_id: UUID) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(f"DELETE FROM {self._table} WHERE id = $1", fact_id)
+
+    async def list_facts(
+        self, user_id: str, limit: int, offset: int
+    ) -> list[MemoryFact]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT * FROM {self._table}
+                WHERE user_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+                """,
+                user_id,
+                limit,
+                offset,
+            )
+        return [self._row_to_fact(row) for row in rows]
+
+    async def list_decayable_facts(
+        self, older_than: datetime, limit: int
+    ) -> list[MemoryFact]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT * FROM {self._table}
+                WHERE status IN ('active', 'provisional')
+                  AND last_reinforced_at < $1
+                ORDER BY last_reinforced_at ASC
+                LIMIT $2
+                """,
+                older_than,
+                limit,
+            )
+        return [self._row_to_fact(row) for row in rows]
 
     async def search_facts(
         self, user_id: str, embedding: list[float], limit: int

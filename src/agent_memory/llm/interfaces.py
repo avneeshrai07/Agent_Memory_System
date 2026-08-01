@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from agent_memory.models import ExtractedCandidate, Turn
+from agent_memory.models import ExtractedCandidate, ResolvedOperation, ScoredFact, Turn
 
 
 @runtime_checkable
@@ -29,3 +29,16 @@ class ExtractionClient(Protocol):
     """
 
     async def extract(self, turn: Turn) -> list[ExtractedCandidate]: ...
+
+
+@runtime_checkable
+class ResolutionClient(Protocol):
+    """Formation-path operation classification (README Section 5, step 3):
+    given a new candidate and its nearest existing memories (already
+    retrieved — this call does not search), decide ADD/UPDATE/DELETE/NOOP.
+    Runs off the critical path.
+    """
+
+    async def classify_operation(
+        self, candidate: ExtractedCandidate, existing: list[ScoredFact]
+    ) -> ResolvedOperation: ...

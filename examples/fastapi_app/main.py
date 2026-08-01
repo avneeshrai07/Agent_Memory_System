@@ -29,9 +29,10 @@ import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from agent_memory.config import MemoryConfig
@@ -39,9 +40,11 @@ from agent_memory.formation import write_memory
 from agent_memory.llm.bedrock import (
     BedrockEmbeddingClient,
     BedrockExtractionClient,
+    BedrockResolutionClient,
     create_bedrock_client,
 )
-from agent_memory.models import Turn
+from agent_memory.management import MemoryNotFoundError, delete_memory, edit_memory, list_memories
+from agent_memory.models import MemoryFact, Turn
 from agent_memory.read import read_memory, render_context_as_text
 from agent_memory.storage.postgres import PostgresFactStore, create_pool
 from agent_memory.storage.redis import (
@@ -68,6 +71,7 @@ class Backends:
     profile_cache: RedisProfileCache
     embedding_client: BedrockEmbeddingClient
     extraction_client: BedrockExtractionClient
+    resolution_client: BedrockResolutionClient
     bedrock_client: Any  # raw client — the host's own generate_response() uses this directly
 
 
@@ -97,6 +101,9 @@ async def lifespan(app: FastAPI):
             dimensions=config.embedding_dim,
         ),
         extraction_client=BedrockExtractionClient(
+            bedrock_client, model_id=config.extraction_model_id
+        ),
+        resolution_client=BedrockResolutionClient(
             bedrock_client, model_id=config.extraction_model_id
         ),
         bedrock_client=bedrock_client,
@@ -162,6 +169,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         write_memory,
         turn,
         extraction_client=backends.extraction_client,
+        resolution_client=backends.resolution_client,
         embedding_client=backends.embedding_client,
         fact_store=backends.fact_store,
     )
@@ -172,3 +180,42 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------
+# User-facing memory view/edit/delete (README Section 7). Plain CRUD over
+# FactStore via agent_memory.management — no formation-pipeline judgment
+# (extraction, resolution, the safety gate) applies to a user's own explicit
+# request to see, correct, or remove something.
+# --------------------------------------------------------------------------
+
+
+@app.get("/memories/{user_id}", response_model=list[MemoryFact])
+async def get_user_memories(user_id: str, limit: int = 50, offset: int = 0) -> list[MemoryFact]:
+    assert backends is not None
+    return await list_memories(
+        user_id, fact_store=backends.fact_store, limit=limit, offset=offset
+    )
+
+
+class EditMemoryRequest(BaseModel):
+    value: str
+
+
+@app.patch("/memories/{fact_id}", response_model=MemoryFact)
+async def patch_user_memory(fact_id: UUID, request: EditMemoryRequest) -> MemoryFact:
+    assert backends is not None
+    try:
+        return await edit_memory(
+            fact_id, request.value,
+            fact_store=backends.fact_store, embedding_client=backends.embedding_client,
+        )
+    except MemoryNotFoundError:
+        raise HTTPException(status_code=404, detail="memory not found")
+
+
+@app.delete("/memories/{fact_id}")
+async def remove_user_memory(fact_id: UUID) -> dict:
+    assert backends is not None
+    await delete_memory(fact_id, fact_store=backends.fact_store)
+    return {"status": "deleted"}

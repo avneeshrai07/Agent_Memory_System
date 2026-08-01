@@ -27,14 +27,29 @@ Send a second message in the same conversation a few seconds later — the
 first turn's formation pass should have run by then — and ask something
 where that preference would matter, to see it come back through Tier 2.
 
+View, correct, or remove what got stored:
+
+```bash
+curl http://127.0.0.1:8000/memories/u1
+curl -X PATCH http://127.0.0.1:8000/memories/<fact_id> -H "Content-Type: application/json" -d '{"value": "corrected value"}'
+curl -X DELETE http://127.0.0.1:8000/memories/<fact_id>
+```
+
+Run the decay sweep (batched maintenance — run this on a schedule, not per-request):
+
+```bash
+python -m examples.fastapi_app.run_decay_sweep
+```
+
 ## What this does and doesn't demonstrate
 
-Does: the full retrieval loop (Tier 0/1/2 reads, concurrent, no LLM call)
-and the full formation loop (extract → embed → write), wired against real
-Postgres/Redis/Bedrock. It also demonstrates the actual contract:
-`agent_memory` never generates the response. `main.py`'s `/chat` handler
-calls `read_memory()` (library), then makes its own Bedrock call via
-`llm.py`'s `generate_response()` (plain host code, not part of the
+Does: the full retrieval loop (Tier 0/1/2 reads, concurrent, no LLM call);
+the full formation loop (extract → resolve → classify ADD/UPDATE/DELETE/NOOP
+→ safety gate → write); user-facing view/edit/delete; and the decay sweep —
+all wired against real Postgres/Redis/Bedrock. It also demonstrates the
+actual contract: `agent_memory` never generates the response. `main.py`'s
+`/chat` handler calls `read_memory()` (library), then makes its own Bedrock
+call via `llm.py`'s `generate_response()` (plain host code, not part of the
 package), then builds the `Turn` itself and hands it to `write_memory()`.
 Swap `llm.py` for tool-calling, streaming, a different model, or a
 different provider entirely — the library doesn't know or care.

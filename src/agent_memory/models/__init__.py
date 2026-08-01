@@ -19,6 +19,7 @@ class MemoryStatus(str, Enum):
     PROVISIONAL = "provisional"
     SUPERSEDED = "superseded"
     REJECTED = "rejected"
+    ARCHIVED = "archived"
 
 
 class Turn(BaseModel):
@@ -64,6 +65,26 @@ class ExtractedCandidate(BaseModel):
     value: str
     confidence: float = Field(ge=0.0, le=1.0)
     explicit: bool
+
+
+class MemoryOperation(str, Enum):
+    """README Section 5, step 3 — how a candidate relates to existing memory."""
+
+    ADD = "add"
+    UPDATE = "update"
+    DELETE = "delete"
+    NOOP = "noop"
+
+
+class ResolvedOperation(BaseModel):
+    """Output of the formation path's resolution step. target_fact_id is a
+    real id already mapped back from whatever the LLM used to refer to the
+    existing fact (README Section 5, step 2-3) — required for UPDATE/DELETE,
+    always None for ADD/NOOP.
+    """
+
+    operation: MemoryOperation
+    target_fact_id: UUID | None = None
 
 
 class MemoryContext(BaseModel):
