@@ -64,3 +64,18 @@ class ExtractedCandidate(BaseModel):
     value: str
     confidence: float = Field(ge=0.0, le=1.0)
     explicit: bool
+
+
+class MemoryContext(BaseModel):
+    """Everything Tier 0/1/2 retrieval assembled for one incoming message.
+
+    This is the read path's entire output. The library stops here — the
+    host application builds its own prompt/messages from this however it
+    wants (its own system prompt, its own tool use, its own model, its own
+    streaming) and makes its own generation call. agent_memory never calls
+    an LLM to produce a user-facing response.
+    """
+
+    profile: dict | None
+    relevant_facts: list[ScoredFact]
+    recent_turns: list[Turn]

@@ -67,16 +67,6 @@ class FakeEmbeddingClient:
         return self._vector
 
 
-class FakeChatClient:
-    def __init__(self, response: str = "fake response"):
-        self._response = response
-        self.calls: list[tuple[str, str]] = []
-
-    async def generate(self, system_prompt: str, user_prompt: str) -> str:
-        self.calls.append((system_prompt, user_prompt))
-        return self._response
-
-
 class FakeExtractionClient:
     def __init__(self, candidates: list[ExtractedCandidate] | None = None):
         self._candidates = candidates or []

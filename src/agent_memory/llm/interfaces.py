@@ -21,16 +21,11 @@ class EmbeddingClient(Protocol):
 
 
 @runtime_checkable
-class ChatClient(Protocol):
-    """The one generation call on the read path (README Section 4, step 6)."""
-
-    async def generate(self, system_prompt: str, user_prompt: str) -> str: ...
-
-
-@runtime_checkable
 class ExtractionClient(Protocol):
     """Formation-path structured extraction (README Section 5, step 1). Runs
-    off the critical path — may be a larger/slower model than ChatClient.
+    off the critical path, on a Turn the host application constructed after
+    its own generation call — may be a larger/slower model than
+    EmbeddingClient.
     """
 
     async def extract(self, turn: Turn) -> list[ExtractedCandidate]: ...

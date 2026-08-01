@@ -15,7 +15,7 @@ from agent_memory.storage.interfaces import FactStore
 MIN_COMMIT_CONFIDENCE = 0.75
 
 
-async def form_memory(
+async def write_memory(
     turn: Turn,
     *,
     extraction_client: ExtractionClient,

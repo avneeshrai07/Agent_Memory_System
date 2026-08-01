@@ -1,4 +1,4 @@
-from agent_memory.formation.pipeline import MIN_COMMIT_CONFIDENCE, form_memory
+from agent_memory.formation.pipeline import MIN_COMMIT_CONFIDENCE, write_memory
 from agent_memory.models import ExtractedCandidate, MemoryStatus, Turn
 
 from .fakes import FakeEmbeddingClient, FakeExtractionClient, FakeFactStore
@@ -22,7 +22,7 @@ async def test_explicit_candidate_commits_active_regardless_of_confidence():
     ]
     fact_store = FakeFactStore()
 
-    written = await form_memory(
+    written = await write_memory(
         _turn(),
         extraction_client=FakeExtractionClient(candidates),
         embedding_client=FakeEmbeddingClient(),
@@ -42,7 +42,7 @@ async def test_implicit_low_confidence_candidate_stays_provisional():
         ),
     ]
 
-    written = await form_memory(
+    written = await write_memory(
         _turn(),
         extraction_client=FakeExtractionClient(candidates),
         embedding_client=FakeEmbeddingClient(),
@@ -60,7 +60,7 @@ async def test_implicit_high_confidence_candidate_commits_active():
         ),
     ]
 
-    written = await form_memory(
+    written = await write_memory(
         _turn(),
         extraction_client=FakeExtractionClient(candidates),
         embedding_client=FakeEmbeddingClient(),
@@ -78,7 +78,7 @@ async def test_each_candidate_is_embedded_and_written_independently():
     embedding_client = FakeEmbeddingClient()
     fact_store = FakeFactStore()
 
-    written = await form_memory(
+    written = await write_memory(
         _turn(),
         extraction_client=FakeExtractionClient(candidates),
         embedding_client=embedding_client,
@@ -91,7 +91,7 @@ async def test_each_candidate_is_embedded_and_written_independently():
 
 
 async def test_no_candidates_writes_nothing():
-    written = await form_memory(
+    written = await write_memory(
         _turn(),
         extraction_client=FakeExtractionClient([]),
         embedding_client=FakeEmbeddingClient(),

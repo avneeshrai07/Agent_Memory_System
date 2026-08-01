@@ -45,6 +45,14 @@ must never share a code path.**
 Two independent services connected by a durable queue, not one pipeline with async bits
 bolted on.
 
+**A third boundary, specific to this being a library rather than a service**: the read path
+itself stops at *retrieving* memory — it does not generate the user-facing response. The
+library hands back structured memory context; the host application makes its own generation
+call (its own model, tools, streaming, provider) and, once it has a response, builds the `Turn`
+and hands it to the formation path itself. The library never calls an LLM to produce a
+response a user sees — only to retrieve (embeddings) or to reason about what's true (formation
+extraction/classification).
+
 ## 3. Memory tiers
 
 | Tier | Contents | Storage | Access pattern |
@@ -68,7 +76,9 @@ separate subsystems:
 
 ## 4. Request-time workflow (read path)
 
-Everything here is cache, index, or arithmetic — never an LLM call deciding *what* to fetch.
+Steps 1–4 are the library's job (`read_memory()`) — cache, index, or arithmetic only,
+never an LLM call deciding *what* to fetch. Steps 5–6 are the host application's own code,
+built on what the library returns; the library does not do them.
 
 1. **Retrieval gate** (heuristic, not LLM): skip the entire retrieval pipeline for turns that
    obviously don't need memory ("ok", "continue", "thanks").
@@ -77,19 +87,28 @@ Everything here is cache, index, or arithmetic — never an LLM call deciding *w
    sequential loop.
 3. **Two-stage funnel**: fast approximate fetch (ANN top-20 via HNSW) → deterministic rerank:
    `score = w1·relevance + w2·recency_decay + w3·importance + w4·type_weight`.
-4. **Pack**: top-N by score, greedily filled into a hard token budget (not a fixed item count).
-5. **Assemble**: deterministic prompt template — Tier 0 + Tier 1 + packed Tier 2/3 results + new
-   message.
-6. **One LLM call** → response.
-7. Return response to the user. Push `{user_id, conversation_id, turn}` onto the durable queue
-   — fire-and-forget, does not block the response.
+4. **Return structured context** (`MemoryContext`: profile + ranked facts + recent turns),
+   packed to a token budget. An optional convenience can flatten this to text, but the
+   structured form is the real contract — the library's responsibility ends here.
 
-Floor cost: 2 cache reads (parallel) + 1 embedding + 3 parallel index lookups + 1 rerank pass +
-1 LLM call. This is the actual speed ceiling — not an implementation detail to optimize later.
+*— host-owned, outside the library —*
+
+5. **Generate**: the host builds its own prompt/messages from the returned context (its own
+   system prompt, tools, streaming, model, provider) and makes its own generation call.
+6. **Persist + hand off**: once the host has its own response, it constructs the `Turn` (it has
+   both messages now), calls `SessionCache.append_turn()`, and pushes the turn to formation —
+   fire-and-forget, so it never blocks the response already returned to the user.
+
+Floor cost through step 4 (the part the library is responsible for): 2 cache reads (parallel) +
+1 embedding + 3 parallel index lookups + 1 rerank pass. This is the speed ceiling the library
+controls; generation latency (step 5) is the host's own model choice, not the library's to own
+or optimize.
 
 ## 5. Formation workflow (write path, async)
 
-Consumes turn-completed events from the durable queue, one turn at a time, per user.
+Consumes turn-completed events from the durable queue, one turn at a time, per user. Each
+`Turn` was constructed by the host application (README Section 4, step 6) after its own
+generation call — the library only ever sees a turn once both messages already exist.
 
 1. **Extract**: one structured-output LLM call → typed candidates (fact / relation /
    preference), each with a confidence score and an explicit-vs-inferred flag.
@@ -218,7 +237,8 @@ agent-memory-system/                 (repo root)
 
 ## 10. Open decisions (to confirm before/while building)
 
-- LLM provider and model for generation, extraction, and operation-classification calls.
+- LLM provider and model for extraction and operation-classification calls. (Generation is
+  host-owned, not a library decision — see Section 4.)
 - Embedding model: local (e.g. sentence-transformers, in-process) vs. hosted API — local
   avoids a network hop on the one embedding call that sits on the critical path.
 - Deployment target for the formation worker pool (separate process vs. separate service).
