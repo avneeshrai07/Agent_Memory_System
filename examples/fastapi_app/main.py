@@ -89,7 +89,11 @@ async def lifespan(app: FastAPI):
     await fact_store.ensure_schema()
 
     redis_client = create_redis_client(config.redis_url)
-    bedrock_client = create_bedrock_client(config.aws_region)
+    bedrock_client = create_bedrock_client(
+        config.aws_region,
+        aws_access_key_id=config.aws_access_key_id,
+        aws_secret_access_key=config.aws_secret_access_key,
+    )
 
     backends = Backends(
         fact_store=fact_store,

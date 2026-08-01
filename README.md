@@ -80,11 +80,14 @@ Steps 1–4 are the library's job (`read_memory()`) — cache, index, or arithme
 never an LLM call deciding *what* to fetch. Steps 5–6 are the host application's own code,
 built on what the library returns; the library does not do them.
 
-1. **Retrieval gate** (heuristic, not LLM): skip the entire retrieval pipeline for turns that
-   obviously don't need memory ("ok", "continue", "thanks").
-2. **Parallel fetch**: Tier 0 + Tier 1 reads, plus one query embedding computed once and reused
-   across all three Tier 2 channels (vector, graph, keyword) — fired concurrently, never in a
-   sequential loop.
+1. **Retrieval gate** (heuristic, not LLM): skip Tier 2 (the embedding call + vector search)
+   for turns that obviously don't need durable memory ("ok", "thanks") — Tier 0/1 are always
+   read regardless, deliberately: they're O(1) cache reads, and dropping them on a one-word
+   reply would break conversational continuity for no real speed win. Tier 2 is the part
+   actually worth skipping.
+2. **Parallel fetch**: Tier 0 + Tier 1 reads, plus (gate permitting) one query embedding
+   computed once and reused across all three Tier 2 channels (vector, graph, keyword) — fired
+   concurrently, never in a sequential loop.
 3. **Two-stage funnel**: fast approximate fetch (ANN top-20 via HNSW) → deterministic rerank:
    `score = w1·relevance + w2·recency_decay + w3·importance + w4·type_weight`.
 4. **Return structured context** (`MemoryContext`: profile + ranked facts + recent turns),
