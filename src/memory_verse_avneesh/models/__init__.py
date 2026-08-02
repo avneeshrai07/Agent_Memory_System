@@ -144,6 +144,31 @@ class PersonIdentity(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class ReminderStatus(str, Enum):
+    PENDING = "pending"
+    DONE = "done"
+    DISMISSED = "dismissed"
+
+
+class Reminder(BaseModel):
+    """Prospective memory — a future intention, not a fact about the past.
+    Created explicitly (by the host, or the host's own LLM calling this as
+    a tool) — write_memory() never creates these on its own; there is no
+    automatic "this sounds like something to remind them about" extraction
+    in this version. Stays PENDING (and keeps surfacing in read_memory()
+    once due) until explicitly marked done or dismissed — reminders never
+    silently disappear once their due_at passes.
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    user_id: str
+    content: str
+    due_at: datetime
+    status: ReminderStatus = ReminderStatus.PENDING
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
+
+
 class MemoryContext(BaseModel):
     """Everything Tier 0/1/2 retrieval assembled for one incoming message.
 
@@ -158,5 +183,6 @@ class MemoryContext(BaseModel):
     relevant_facts: list[ScoredFact]
     recent_turns: list[Turn]
     relevant_episodes: list[ScoredEpisode] = []
+    due_reminders: list[Reminder] = []
     person_identity: str | None = None
     expert_identity: str | None = None

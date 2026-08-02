@@ -19,12 +19,13 @@ import math
 from datetime import datetime, timezone
 
 from memory_verse_avneesh.llm.interfaces import EmbeddingClient
-from memory_verse_avneesh.models import MemoryContext, ScoredEpisode, ScoredFact
+from memory_verse_avneesh.models import MemoryContext, Reminder, ScoredEpisode, ScoredFact
 from memory_verse_avneesh.storage.interfaces import (
     EpisodicStore,
     FactStore,
     IdentityStore,
     ProfileCache,
+    ReminderStore,
     SessionCache,
 )
 
@@ -211,6 +212,17 @@ async def _get_expert_identity_content(
     return identity.content if identity else None
 
 
+async def _get_due_reminders(
+    user_id: str, reminder_store: ReminderStore | None, now: datetime
+) -> list[Reminder]:
+    # Deterministic time comparison, not a similarity search -- no
+    # embedding involved, same "always fetched, no LLM judgment" contract
+    # as person identity.
+    if reminder_store is None:
+        return []
+    return await reminder_store.list_due_reminders(user_id, now)
+
+
 async def read_memory(
     *,
     user_id: str,
@@ -223,6 +235,7 @@ async def read_memory(
     identity_store: IdentityStore | None = None,
     identity_id: str | None = None,
     episodic_store: EpisodicStore | None = None,
+    reminder_store: ReminderStore | None = None,
     recent_turns_limit: int = 5,
     fact_limit: int = 20,
     episode_limit: int = DEFAULT_EPISODE_LIMIT,
@@ -250,17 +263,34 @@ async def read_memory(
     embedding and retrieval gate as fact search (one embedding call, not
     two), then gets its own rerank (relevance + recency only) and budget
     pack, independent of the facts budget.
+
+    reminder_store is optional — omit it entirely if the host doesn't use
+    the prospective memory feature. When set, PENDING reminders with
+    due_at <= now are always included (a plain time comparison, not a
+    similarity search) — no identity_id-style opt-in needed, since "is it
+    due yet" has nothing to do with the current message's content.
     """
 
-    # Phase 1: Tier 0/1 reads, the (gated) query embedding, and identity
-    # lookups all fire concurrently -- the embedding isn't awaited on its
-    # own beforehand, it's just one more concurrent task in this gather.
-    recent_turns, profile, query_embedding, person_identity, expert_identity = await asyncio.gather(
+    now = datetime.now(timezone.utc)
+
+    # Phase 1: Tier 0/1 reads, the (gated) query embedding, identity
+    # lookups, and due reminders all fire concurrently -- the embedding
+    # isn't awaited on its own beforehand, it's just one more concurrent
+    # task in this gather.
+    (
+        recent_turns,
+        profile,
+        query_embedding,
+        person_identity,
+        expert_identity,
+        due_reminders,
+    ) = await asyncio.gather(
         session_cache.get_recent_turns(conversation_id, recent_turns_limit),
         profile_cache.get_profile(user_id),
         _compute_query_embedding(message, embedding_client),
         _get_person_identity_content(user_id, identity_store),
         _get_expert_identity_content(identity_id, identity_store),
+        _get_due_reminders(user_id, reminder_store, now),
     )
 
     # Phase 2: both Tier 2 channels reuse that one embedding, fired
@@ -269,8 +299,6 @@ async def read_memory(
         _search_facts_with_embedding(user_id, query_embedding, fact_store, fact_limit),
         _search_episodes_with_embedding(user_id, query_embedding, episodic_store, episode_limit),
     )
-
-    now = datetime.now(timezone.utc)
 
     reranked = _rerank(
         scored_facts,
@@ -290,6 +318,7 @@ async def read_memory(
         relevant_facts=packed,
         recent_turns=recent_turns,
         relevant_episodes=packed_episodes,
+        due_reminders=due_reminders,
         person_identity=person_identity,
         expert_identity=expert_identity,
     )
@@ -308,6 +337,12 @@ def render_context_as_text(context: MemoryContext, message: str) -> str:
 
     if context.person_identity:
         sections.append(f"PERSON IDENTITY:\n{context.person_identity}")
+
+    if context.due_reminders:
+        reminder_lines = "\n".join(
+            f"- {r.content} (due {r.due_at.isoformat()})" for r in context.due_reminders
+        )
+        sections.append(f"DUE REMINDERS:\n{reminder_lines}")
 
     if context.profile:
         profile_lines = "\n".join(

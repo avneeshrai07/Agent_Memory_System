@@ -98,6 +98,17 @@ Both surface on `MemoryContext` as `expert_identity` / `person_identity` — com
 when both are present, e.g. an "expert email writer" persona applied with a specific person's
 own tone preferences layered on top.
 
+**Prospective memory** (`reminders` table) is future intentions, not facts about the past or
+present — "do X later." Created explicitly through `memory_verse_avneesh.prospective`, by the
+host's own code or its own LLM calling it as a tool during generation; `write_memory()` never
+creates one automatically, there is no "this sounds like something to remind them about"
+extraction in this version. `read_memory()` always includes PENDING reminders with
+`due_at <= now` on `MemoryContext.due_reminders` when a `ReminderStore` is configured — a plain
+deterministic time comparison, not a similarity search, so it's included regardless of the
+current message's content (even a trivial "thanks!" still surfaces a due reminder). A reminder
+stays PENDING — and keeps being returned — until explicitly marked done or dismissed; passing
+`due_at` doesn't silently remove it.
+
 ## 4. Request-time workflow (read path)
 
 Steps 1–4 are the library's job (`read_memory()`) — cache, index, or arithmetic only,
@@ -115,9 +126,10 @@ built on what the library returns; the library does not do them.
 3. **Two-stage funnel**: fast approximate fetch (ANN top-20 via HNSW) → deterministic rerank:
    `score = w1·relevance + w2·recency_decay + w3·importance + w4·type_weight`.
 4. **Return structured context** (`MemoryContext`: profile + ranked facts + recent turns +
-   ranked episodes + identity), packed to a token budget (facts and episodes have independent
-   budgets). An optional convenience can flatten this to text, but the structured form is the
-   real contract — the library's responsibility ends here.
+   ranked episodes + identity + due reminders), packed to a token budget (facts and episodes
+   have independent budgets; due reminders aren't budget-packed, since they're a plain time
+   filter, not a ranked/truncated list). An optional convenience can flatten this to text, but
+   the structured form is the real contract — the library's responsibility ends here.
 
 *— host-owned, outside the library —*
 
@@ -162,9 +174,11 @@ generation call — the library only ever sees a turn once both messages already
 - **Postgres**: `episodes` (raw, append-only, embedded, source of truth — episodic memory, see
   Section 3) · `memory_facts` (Tier 2 vector rows) · `memory_edges` (Tier 2 bi-temporal graph) ·
   `reflections` (Tier 3) · `archival_*` (cold copies) · `expert_identities` /
-  `person_identities` (identity, see Section 3) — all under one required, host-chosen schema
-  (`MemoryConfig.postgres_schema`), never a default `public`. pgvector + HNSW index for vector
-  search (used by both `memory_facts` and `episodes`). Plain indexed edges table with
+  `person_identities` (identity, see Section 3) · `reminders` (prospective memory, see Section
+  3 — no embedding column, indexed on `(user_id, status, due_at)` for the due-reminders lookup)
+  — all under one required, host-chosen schema (`MemoryConfig.postgres_schema`), never a default
+  `public`. pgvector + HNSW index for vector search (used by both `memory_facts` and `episodes`).
+  Plain indexed edges table with
   recursive CTEs for 1–2 hop graph queries — no separate graph database at this scale.
 - **Redis**: Tier 0 session cache, Tier 1 profile cache, durable job stream (Redis Streams)
   feeding the formation worker pool.

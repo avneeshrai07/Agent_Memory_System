@@ -14,6 +14,7 @@ from memory_verse_avneesh.models import (
     ExpertIdentity,
     MemoryFact,
     PersonIdentity,
+    Reminder,
     ScoredEpisode,
     ScoredFact,
     Turn,
@@ -99,6 +100,47 @@ class EpisodicStore(Protocol):
         """Plain paginated listing, newest-first — chronological "what
         happened" browsing, not a similarity search, for a host's
         user-facing memory surface.
+        """
+        ...
+
+
+@runtime_checkable
+class ReminderStore(Protocol):
+    """Prospective memory: future intentions, not facts about the past.
+    Created explicitly through this store's own CRUD — write_memory() never
+    creates a Reminder on its own, there is no automatic extraction. A
+    reminder stays PENDING (and keeps being returned by
+    list_due_reminders()) until explicitly marked done/dismissed; passing
+    due_at doesn't silently remove it.
+    """
+
+    async def create_reminder(self, reminder: Reminder) -> Reminder: ...
+
+    async def get_reminder(self, reminder_id: UUID) -> Reminder | None: ...
+
+    async def update_reminder(self, reminder: Reminder) -> Reminder:
+        """Used for status transitions (mark done/dismissed) — the content
+        and due_at of a reminder aren't expected to change after creation,
+        but nothing prevents it.
+        """
+        ...
+
+    async def delete_reminder(self, reminder_id: UUID) -> None:
+        """Idempotent: deleting an id that's already gone is not an error."""
+        ...
+
+    async def list_reminders(
+        self, user_id: str, limit: int, offset: int
+    ) -> list[Reminder]:
+        """All reminders regardless of status, newest-first — for a host's
+        user-facing "view your reminders" surface, not the due-only query
+        read_memory() uses.
+        """
+        ...
+
+    async def list_due_reminders(self, user_id: str, as_of: datetime) -> list[Reminder]:
+        """PENDING reminders with due_at <= as_of — what read_memory() fetches
+        automatically. Deterministic time comparison, no embedding, no LLM.
         """
         ...
 

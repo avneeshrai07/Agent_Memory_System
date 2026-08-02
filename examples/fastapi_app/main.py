@@ -29,6 +29,7 @@ import os
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -56,13 +57,23 @@ from memory_verse_avneesh.llm.bedrock import (
     create_bedrock_client,
 )
 from memory_verse_avneesh.management import MemoryNotFoundError, delete_memory, edit_memory, list_memories
-from memory_verse_avneesh.models import Episode, ExpertIdentity, MemoryFact, PersonIdentity, Turn
+from memory_verse_avneesh.models import Episode, ExpertIdentity, MemoryFact, PersonIdentity, Reminder, Turn
+from memory_verse_avneesh.prospective import (
+    ReminderNotFoundError,
+    create_reminder,
+    delete_reminder,
+    dismiss_reminder,
+    get_reminder,
+    list_reminders,
+    mark_done,
+)
 from memory_verse_avneesh.read import read_memory, render_context_as_text
 from memory_verse_avneesh.storage.interfaces import ProfileCache, SessionCache
 from memory_verse_avneesh.storage.postgres import (
     PostgresEpisodicStore,
     PostgresFactStore,
     PostgresIdentityStore,
+    PostgresReminderStore,
     create_pool,
 )
 from memory_verse_avneesh.storage.redis import (
@@ -92,6 +103,7 @@ class Backends:
     fact_store: PostgresFactStore
     identity_store: PostgresIdentityStore
     episodic_store: PostgresEpisodicStore
+    reminder_store: PostgresReminderStore
     session_cache: SessionCache
     profile_cache: ProfileCache
     embedding_client: BedrockEmbeddingClient
@@ -139,6 +151,9 @@ async def lifespan(app: FastAPI):
     )
     await episodic_store.ensure_schema()
 
+    reminder_store = PostgresReminderStore(pg_pool, schema=config.postgres_schema)
+    await reminder_store.ensure_schema()
+
     # Exactly one of these is set -- MemoryConfig.__post_init__ already
     # guarantees that, so no further validation needed here.
     if config.redis_url is not None:
@@ -163,6 +178,7 @@ async def lifespan(app: FastAPI):
         fact_store=fact_store,
         identity_store=identity_store,
         episodic_store=episodic_store,
+        reminder_store=reminder_store,
         session_cache=session_cache,
         profile_cache=profile_cache,
         embedding_client=BedrockEmbeddingClient(
@@ -219,6 +235,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         identity_store=backends.identity_store,
         identity_id=request.identity_id,
         episodic_store=backends.episodic_store,
+        reminder_store=backends.reminder_store,
     )
 
     # 2. Host: build the prompt however it wants. (render_context_as_text is
@@ -484,4 +501,69 @@ async def get_episode_route(episode_id: UUID) -> Episode:
 async def remove_episode(episode_id: UUID) -> dict:
     assert backends is not None
     await delete_episode(episode_id, episodic_store=backends.episodic_store)
+    return {"status": "deleted"}
+
+
+# --------------------------------------------------------------------------
+# Prospective memory: reminders. Created explicitly here (or by the host's
+# own LLM calling this as a tool during its generation step) -- write_memory()
+# never creates one on its own. /chat automatically surfaces whatever is
+# already due via read_memory()'s reminder_store, with no separate route
+# needed just to "check reminders".
+# --------------------------------------------------------------------------
+
+
+class CreateReminderRequest(BaseModel):
+    user_id: str
+    content: str
+    due_at: datetime
+
+
+@app.post("/reminders", response_model=Reminder)
+async def create_reminder_route(request: CreateReminderRequest) -> Reminder:
+    assert backends is not None
+    return await create_reminder(
+        request.user_id, request.content, request.due_at, reminder_store=backends.reminder_store
+    )
+
+
+@app.get("/reminders/{user_id}", response_model=list[Reminder])
+async def get_user_reminders(user_id: str, limit: int = 50, offset: int = 0) -> list[Reminder]:
+    assert backends is not None
+    return await list_reminders(
+        user_id, reminder_store=backends.reminder_store, limit=limit, offset=offset
+    )
+
+
+@app.post("/reminders/detail/{reminder_id}/done", response_model=Reminder)
+async def mark_reminder_done(reminder_id: UUID) -> Reminder:
+    assert backends is not None
+    try:
+        return await mark_done(reminder_id, reminder_store=backends.reminder_store)
+    except ReminderNotFoundError:
+        raise HTTPException(status_code=404, detail="reminder not found")
+
+
+@app.post("/reminders/detail/{reminder_id}/dismiss", response_model=Reminder)
+async def dismiss_reminder_route(reminder_id: UUID) -> Reminder:
+    assert backends is not None
+    try:
+        return await dismiss_reminder(reminder_id, reminder_store=backends.reminder_store)
+    except ReminderNotFoundError:
+        raise HTTPException(status_code=404, detail="reminder not found")
+
+
+@app.get("/reminders/detail/{reminder_id}", response_model=Reminder)
+async def get_reminder_route(reminder_id: UUID) -> Reminder:
+    assert backends is not None
+    try:
+        return await get_reminder(reminder_id, reminder_store=backends.reminder_store)
+    except ReminderNotFoundError:
+        raise HTTPException(status_code=404, detail="reminder not found")
+
+
+@app.delete("/reminders/detail/{reminder_id}")
+async def remove_reminder(reminder_id: UUID) -> dict:
+    assert backends is not None
+    await delete_reminder(reminder_id, reminder_store=backends.reminder_store)
     return {"status": "deleted"}

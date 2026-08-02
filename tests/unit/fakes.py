@@ -14,6 +14,8 @@ from memory_verse_avneesh.models import (
     MemoryFact,
     MemoryStatus,
     PersonIdentity,
+    Reminder,
+    ReminderStatus,
     ResolvedOperation,
     ScoredEpisode,
     ScoredFact,
@@ -173,6 +175,41 @@ class FakeIdentityStore:
         values = list(self._person.values())
         values.sort(key=lambda i: i.created_at, reverse=True)
         return values[offset : offset + limit]
+
+
+class FakeReminderStore:
+    def __init__(self):
+        self._reminders: dict[UUID, Reminder] = {}
+
+    async def create_reminder(self, reminder: Reminder) -> Reminder:
+        self._reminders[reminder.id] = reminder
+        return reminder
+
+    async def get_reminder(self, reminder_id: UUID) -> Reminder | None:
+        return self._reminders.get(reminder_id)
+
+    async def update_reminder(self, reminder: Reminder) -> Reminder:
+        self._reminders[reminder.id] = reminder
+        return reminder
+
+    async def delete_reminder(self, reminder_id: UUID) -> None:
+        self._reminders.pop(reminder_id, None)
+
+    async def list_reminders(self, user_id: str, limit: int, offset: int) -> list[Reminder]:
+        matching = [r for r in self._reminders.values() if r.user_id == user_id]
+        matching.sort(key=lambda r: r.due_at, reverse=True)
+        return matching[offset : offset + limit]
+
+    async def list_due_reminders(self, user_id: str, as_of: datetime) -> list[Reminder]:
+        due = [
+            r
+            for r in self._reminders.values()
+            if r.user_id == user_id
+            and r.status == ReminderStatus.PENDING
+            and r.due_at <= as_of
+        ]
+        due.sort(key=lambda r: r.due_at)
+        return due
 
 
 class FakeEmbeddingClient:

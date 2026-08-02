@@ -6,6 +6,7 @@ from memory_verse_avneesh.models import (
     MemoryContext,
     MemoryFact,
     PersonIdentity,
+    Reminder,
     ScoredEpisode,
     ScoredFact,
     Turn,
@@ -22,6 +23,7 @@ from .fakes import (
     FakeFactStore,
     FakeIdentityStore,
     FakeProfileCache,
+    FakeReminderStore,
     FakeSessionCache,
 )
 
@@ -437,3 +439,70 @@ async def test_render_context_as_text_includes_episode_section():
     assert "RELEVANT PAST CONVERSATIONS:" in text
     assert "what's a good subject line?" in text
     assert "try 'Quick question'" in text
+
+
+# --- prospective memory ----------------------------------------------------
+
+
+async def test_read_memory_without_reminder_store_returns_no_reminders():
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="a real question here",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+    )
+
+    assert context.due_reminders == []
+
+
+async def test_read_memory_includes_due_reminders_regardless_of_message_content():
+    reminder_store = FakeReminderStore()
+    due = Reminder(
+        user_id="u1", content="follow up with the client",
+        due_at=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+    await reminder_store.create_reminder(due)
+
+    # trivial message that would normally gate off Tier 2 entirely --
+    # reminders aren't content-relevance-based, so this should NOT matter
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="thanks!",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        reminder_store=reminder_store,
+    )
+
+    assert len(context.due_reminders) == 1
+    assert context.due_reminders[0].content == "follow up with the client"
+
+
+async def test_read_memory_excludes_not_yet_due_reminders():
+    reminder_store = FakeReminderStore()
+    not_yet_due = Reminder(
+        user_id="u1", content="future thing",
+        due_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    await reminder_store.create_reminder(not_yet_due)
+
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="a real question here",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        reminder_store=reminder_store,
+    )
+
+    assert context.due_reminders == []
+
+
+async def test_render_context_as_text_includes_reminder_section():
+    reminder = Reminder(
+        user_id="u1", content="follow up with the client",
+        due_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    context = MemoryContext(
+        profile=None, relevant_facts=[], recent_turns=[], due_reminders=[reminder],
+    )
+
+    text = render_context_as_text(context, "a new message")
+
+    assert "DUE REMINDERS:" in text
+    assert "follow up with the client" in text
