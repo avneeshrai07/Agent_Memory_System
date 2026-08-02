@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from agent_memory.formation.decay import run_decay_sweep
-from agent_memory.models import MemoryFact, MemoryStatus
+from memory_verse_avneesh.formation.decay import run_decay_sweep
+from memory_verse_avneesh.models import MemoryFact, MemoryStatus
 
 from .fakes import FakeFactStore
 

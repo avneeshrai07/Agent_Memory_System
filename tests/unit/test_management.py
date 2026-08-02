@@ -2,8 +2,8 @@ from uuid import uuid4
 
 import pytest
 
-from agent_memory.management import MemoryNotFoundError, delete_memory, edit_memory, list_memories
-from agent_memory.models import MemoryFact
+from memory_verse_avneesh.management import MemoryNotFoundError, delete_memory, edit_memory, list_memories
+from memory_verse_avneesh.models import MemoryFact
 
 from .fakes import FakeEmbeddingClient, FakeFactStore
 

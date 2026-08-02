@@ -1,7 +1,7 @@
 # FastAPI reference integration
 
-Shows how a host application wires `agent_memory` in. Ships with the repo
-for reference — it is not part of the published `agent-memory` package.
+Shows how a host application wires `memory_verse_avneesh` in. Ships with the repo
+for reference — it is not part of the published `memory-verse-avneesh` package.
 
 ## Run
 
@@ -47,7 +47,7 @@ Does: the full retrieval loop (Tier 0/1/2 reads, concurrent, no LLM call);
 the full formation loop (extract → resolve → classify ADD/UPDATE/DELETE/NOOP
 → safety gate → write); user-facing view/edit/delete; and the decay sweep —
 all wired against real Postgres/Redis/Bedrock. It also demonstrates the
-actual contract: `agent_memory` never generates the response. `main.py`'s
+actual contract: `memory_verse_avneesh` never generates the response. `main.py`'s
 `/chat` handler calls `read_memory()` (library), then makes its own Bedrock
 call via `llm.py`'s `generate_response()` (plain host code, not part of the
 package), then builds the `Turn` itself and hands it to `write_memory()`.

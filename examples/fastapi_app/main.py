@@ -1,11 +1,11 @@
-"""Reference integration: how a host application wires agent_memory in.
+"""Reference integration: how a host application wires memory_verse_avneesh in.
 
 This is a demo — it ships in the repo, not in the published package. It
 shows the pattern (README Section 9): construct concrete backends once at
 startup, call read_memory() on the request path, then — this is the
 important part — the host makes its OWN generation call (see llm.py, which
-is plain host code, not agent_memory), constructs the Turn itself, and only
-then hands it to write_memory(). agent_memory never calls an LLM to produce
+is plain host code, not memory_verse_avneesh), constructs the Turn itself, and only
+then hands it to write_memory(). memory_verse_avneesh never calls an LLM to produce
 the user-facing response; it only supplies memory context and, afterward,
 learns from a Turn the host built.
 
@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -35,22 +36,28 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel
 
-from agent_memory.config import MemoryConfig
-from agent_memory.formation import write_memory
-from agent_memory.llm.bedrock import (
+from memory_verse_avneesh.config import MemoryConfig
+from memory_verse_avneesh.formation import write_memory
+from memory_verse_avneesh.llm.bedrock import (
     BedrockEmbeddingClient,
     BedrockExtractionClient,
     BedrockResolutionClient,
     create_bedrock_client,
 )
-from agent_memory.management import MemoryNotFoundError, delete_memory, edit_memory, list_memories
-from agent_memory.models import MemoryFact, Turn
-from agent_memory.read import read_memory, render_context_as_text
-from agent_memory.storage.postgres import PostgresFactStore, create_pool
-from agent_memory.storage.redis import (
+from memory_verse_avneesh.management import MemoryNotFoundError, delete_memory, edit_memory, list_memories
+from memory_verse_avneesh.models import MemoryFact, Turn
+from memory_verse_avneesh.read import read_memory, render_context_as_text
+from memory_verse_avneesh.storage.interfaces import ProfileCache, SessionCache
+from memory_verse_avneesh.storage.postgres import PostgresFactStore, create_pool
+from memory_verse_avneesh.storage.redis import (
     RedisProfileCache,
     RedisSessionCache,
     create_redis_client,
+)
+from memory_verse_avneesh.storage.upstash import (
+    UpstashProfileCache,
+    UpstashSessionCache,
+    create_upstash_client,
 )
 
 from .llm import generate_response
@@ -59,7 +66,7 @@ load_dotenv()
 
 SYSTEM_PROMPT = "You are a helpful assistant with persistent memory of this user."
 
-# Generation model choice is host config, not agent_memory config — the
+# Generation model choice is host config, not memory_verse_avneesh config — the
 # library has no opinion about how (or whether) you generate a response.
 CHAT_MODEL_ID = os.environ.get("CHAT_MODEL_ID", "amazon.nova-lite-v1:0")
 
@@ -67,8 +74,8 @@ CHAT_MODEL_ID = os.environ.get("CHAT_MODEL_ID", "amazon.nova-lite-v1:0")
 @dataclass
 class Backends:
     fact_store: PostgresFactStore
-    session_cache: RedisSessionCache
-    profile_cache: RedisProfileCache
+    session_cache: SessionCache
+    profile_cache: ProfileCache
     embedding_client: BedrockEmbeddingClient
     extraction_client: BedrockExtractionClient
     resolution_client: BedrockResolutionClient
@@ -77,18 +84,47 @@ class Backends:
 
 backends: Backends | None = None
 
+# Set by lifespan to whichever shutdown call the chosen cache backend needs
+# (redis.asyncio uses aclose(), upstash-redis uses close()) — resolved once,
+# at startup, rather than branching on client type again at shutdown.
+_close_cache: Callable[[], Awaitable[None]] | None = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global backends
+    global backends, _close_cache
 
-    config = MemoryConfig.from_env()
+    try:
+        config = MemoryConfig.from_env()
+    except (KeyError, ValueError) as e:
+        # Incomplete/invalid config shouldn't crash-loop the whole app --
+        # /health and /setup_memory need to stay reachable precisely when
+        # config is broken, since that's when a developer needs them most.
+        # Routes that need `backends` (e.g. /chat) will fail clearly via
+        # their own `assert backends is not None` if hit in this state.
+        print(f"[startup] memory_verse_avneesh not configured: {e}")
+        print("[startup] GET /setup_memory to see what's missing.")
+        yield
+        return
 
     pg_pool = await create_pool(config.postgres_dsn)
     fact_store = PostgresFactStore(pg_pool, embedding_dim=config.embedding_dim)
     await fact_store.ensure_schema()
 
-    redis_client = create_redis_client(config.redis_url)
+    # Exactly one of these is set -- MemoryConfig.__post_init__ already
+    # guarantees that, so no further validation needed here.
+    if config.redis_url is not None:
+        redis_client = create_redis_client(config.redis_url)
+        session_cache: SessionCache = RedisSessionCache(redis_client)
+        profile_cache: ProfileCache = RedisProfileCache(redis_client)
+        _close_cache = redis_client.aclose
+    else:
+        assert config.upstash_url is not None and config.upstash_token is not None
+        upstash_client = create_upstash_client(config.upstash_url, config.upstash_token)
+        session_cache = UpstashSessionCache(upstash_client)
+        profile_cache = UpstashProfileCache(upstash_client)
+        _close_cache = upstash_client.close
+
     bedrock_client = create_bedrock_client(
         config.aws_region,
         aws_access_key_id=config.aws_access_key_id,
@@ -97,8 +133,8 @@ async def lifespan(app: FastAPI):
 
     backends = Backends(
         fact_store=fact_store,
-        session_cache=RedisSessionCache(redis_client),
-        profile_cache=RedisProfileCache(redis_client),
+        session_cache=session_cache,
+        profile_cache=profile_cache,
         embedding_client=BedrockEmbeddingClient(
             bedrock_client,
             model_id=config.embedding_model_id,
@@ -116,8 +152,9 @@ async def lifespan(app: FastAPI):
     yield
 
     await pg_pool.close()
-    await redis_client.aclose()
+    await _close_cache()
     backends = None
+    _close_cache = None
 
 
 app = FastAPI(lifespan=lifespan)
@@ -153,7 +190,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
     #    use it; a real host might build a message list, add tools, etc.)
     user_prompt = render_context_as_text(context, request.message)
 
-    # 3. Host: make its own generation call. agent_memory has no part in this.
+    # 3. Host: make its own generation call. memory_verse_avneesh has no part in this.
     response_text = await asyncio.to_thread(
         generate_response, backends.bedrock_client, CHAT_MODEL_ID,
         SYSTEM_PROMPT, user_prompt,
@@ -187,8 +224,87 @@ async def health() -> dict:
 
 
 # --------------------------------------------------------------------------
+# Setup diagnostics. Deliberately reachable even when config is incomplete
+# (see lifespan above) -- this is a "what do I still need to set" endpoint
+# for a developer, not something an end user would ever hit. Reports key
+# names and whether each is set; NEVER the actual values.
+# --------------------------------------------------------------------------
+
+_CONFIG_REQUIREMENTS = [
+    {
+        "key": "POSTGRES_DSN", "group": "postgres", "required": True,
+        "description": "Postgres connection string. Must support the pgvector extension "
+                        "(e.g. Neon, Supabase, or RDS with pgvector enabled).",
+    },
+    {
+        "key": "REDIS_URL", "group": "cache_backend: standard_redis", "required": False,
+        "description": "Standard Redis-protocol connection string (self-hosted Redis, "
+                        "ElastiCache, etc).",
+    },
+    {
+        "key": "UPSTASH_REDIS_REST_URL", "group": "cache_backend: upstash", "required": False,
+        "description": "Upstash REST API URL, from the Upstash console.",
+    },
+    {
+        "key": "UPSTASH_REDIS_REST_TOKEN", "group": "cache_backend: upstash", "required": False,
+        "description": "Upstash REST API token, paired with UPSTASH_REDIS_REST_URL.",
+    },
+    {
+        "key": "AWS_REGION", "group": "bedrock", "required": False,
+        "description": "AWS region with Bedrock model access enabled for your account. "
+                        "Defaults to us-east-1 -- must be a region you've actually requested "
+                        "model access in, or calls will fail.",
+    },
+    {
+        "key": "AWS_LLM_ACCESS_KEY_ID", "group": "bedrock", "required": False,
+        "description": "Optional. Omit both AWS_LLM_* keys to fall back to boto3's default "
+                        "credential chain (instance/task IAM role, ~/.aws/credentials).",
+    },
+    {
+        "key": "AWS_LLM_SECRET_ACCESS_KEY", "group": "bedrock", "required": False,
+        "description": "Paired with AWS_LLM_ACCESS_KEY_ID.",
+    },
+    {
+        "key": "MEMORY_VERSE_AVNEESH_EMBEDDING_DIM", "group": "bedrock", "required": False,
+        "description": "Embedding vector dimension. Defaults to 1024. Gets baked into the "
+                        "Postgres schema on first ensure_schema() call -- decide before your "
+                        "first run, changing it later means a new table, not a config edit.",
+    },
+    {
+        "key": "CHAT_MODEL_ID", "group": "host_generation (this example only)", "required": False,
+        "description": "Which Bedrock model this example app uses for its OWN response "
+                        "generation. Not read by memory_verse_avneesh itself -- the library has no "
+                        "opinion about how you generate a response.",
+    },
+]
+
+
+@app.get("/setup_memory")
+async def setup_memory() -> dict:
+    requirements = [
+        {**req, "set": bool(os.environ.get(req["key"]))} for req in _CONFIG_REQUIREMENTS
+    ]
+
+    try:
+        MemoryConfig.from_env()
+        ready = True
+        error = None
+    except (KeyError, ValueError) as e:
+        ready = False
+        error = str(e)
+
+    return {
+        "ready": ready,
+        "error": error,
+        "note": "Set POSTGRES_DSN, plus exactly ONE cache backend group (standard_redis "
+                "OR upstash) -- everything else is optional with sensible defaults.",
+        "requirements": requirements,
+    }
+
+
+# --------------------------------------------------------------------------
 # User-facing memory view/edit/delete (README Section 7). Plain CRUD over
-# FactStore via agent_memory.management — no formation-pipeline judgment
+# FactStore via memory_verse_avneesh.management — no formation-pipeline judgment
 # (extraction, resolution, the safety gate) applies to a user's own explicit
 # request to see, correct, or remove something.
 # --------------------------------------------------------------------------

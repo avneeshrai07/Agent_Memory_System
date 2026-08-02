@@ -1,6 +1,6 @@
-from agent_memory.formation.pipeline import MIN_COMMIT_CONFIDENCE, write_memory
-from agent_memory.formation.safety_gate import SAFETY_GATE_MIN_OBSERVATIONS
-from agent_memory.models import (
+from memory_verse_avneesh.formation.pipeline import MIN_COMMIT_CONFIDENCE, write_memory
+from memory_verse_avneesh.formation.safety_gate import SAFETY_GATE_MIN_OBSERVATIONS
+from memory_verse_avneesh.models import (
     ExtractedCandidate,
     MemoryFact,
     MemoryStatus,

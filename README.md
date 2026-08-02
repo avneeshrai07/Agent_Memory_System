@@ -1,14 +1,15 @@
-# Agent Memory System
+# memory-verse-avneesh
 
 A persistent memory layer for a conversational LLM agent — built to make responses feel
 personalized and consistent across sessions, without adding noticeable latency and without
 ever confidently telling the model something false or stale about the user.
 
 This is a from-scratch rebuild. The previous implementation is gone; this document is the
-plan the rebuild follows. Nothing below is implemented yet — this is the spec.
+plan the rebuild follows.
 
 This project is built and distributed as an **installable Python library published on PyPI**
-(`pip install agent-memory`, name TBD — see Open Decisions), not as a standalone service. A
+(`pip install memory-verse-avneesh`), not as a standalone service — the third package in the
+`-verse-avneesh` family, alongside `storage-verse-avneesh` and `llm-verse-avneesh`. A
 host application (FastAPI, Flask, a CLI, whatever) imports it and calls it directly. This
 constraint shapes several decisions below: storage and LLM backends must be pluggable rather
 than hardcoded, the formation worker must be something the host process runs rather than
@@ -182,13 +183,13 @@ is actually falling short — not speculatively upfront.
 against the working directory instead of the installed package):**
 
 ```
-agent-memory-system/                 (repo root)
+memory-verse-avneesh/                        (repo root)
 ├── pyproject.toml                   (PEP 621 metadata, build backend, optional-dependencies)
 ├── README.md
 ├── LICENSE
 ├── src/
-│   └── agent_memory/                (importable package — the actual library)
-│       ├── __init__.py              (small public API surface: AgentMemory, config types)
+│   └── memory_verse_avneesh/                (importable package — the actual library)
+│       ├── __init__.py              (package metadata; the callables live in read/, formation/, management.py)
 │       ├── py.typed                 (marks the package as type-hinted for downstream users)
 │       ├── config.py                (settings/config objects, no global state)
 │       ├── read/                    (read-path: Section 4)
@@ -232,7 +233,7 @@ agent-memory-system/                 (repo root)
   asyncio task (simple deployments) or as a separate process/service (Phase 1 build-order
   default per Section 8) — the library doesn't assume either.
 - **Optional extras** in `pyproject.toml` so installing the library doesn't force every
-  dependency: e.g. `pip install agent-memory[postgres,redis,bedrock]`.
+  dependency: e.g. `pip install memory-verse-avneesh[postgres,redis,bedrock]`.
 - **Semantic versioning** from the first published release, since a public API surface means
   breaking changes have real downstream cost.
 - `examples/fastapi_app` is a reference/demo of integrating the library into a service — it is
@@ -245,7 +246,8 @@ agent-memory-system/                 (repo root)
 - Embedding model: local (e.g. sentence-transformers, in-process) vs. hosted API — local
   avoids a network hop on the one embedding call that sits on the critical path.
 - Deployment target for the formation worker pool (separate process vs. separate service).
-- **PyPI package name** — `agent-memory` may already be taken; needs a availability check
-  before it's final. Import name (`agent_memory` vs. something else) should match.
+- ~~PyPI package name~~ — decided: `memory-verse-avneesh` (repo renamed to match), import name
+  `memory_verse_avneesh`. Third package in the `-verse-avneesh` family alongside
+  `storage-verse-avneesh` and `llm-verse-avneesh`.
 - **Minimum supported Python version** and how far back to support (affects typing syntax,
   async features available).

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agent-memory"
+name = "memory-verse-avneesh"
 version = "0.1.0"
 description = "Persistent, fast, accurate memory layer for conversational LLM agents"
 readme = "README.md"
@@ -19,10 +19,12 @@ postgres = ["asyncpg>=0.29", "pgvector>=0.2"]
 redis = ["redis>=5.0"]
 upstash = ["upstash-redis>=1.0"]
 bedrock = ["boto3>=1.34"]
+verse-storage = ["storage-verse-avneesh[redis,upstash]>=0.1.2"]
+verse-llm = ["llm-verse-avneesh[aws]>=0.1.9"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent_memory"]
+packages = ["src/memory_verse_avneesh"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

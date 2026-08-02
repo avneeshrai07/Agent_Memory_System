@@ -15,9 +15,9 @@ import asyncio
 
 from dotenv import load_dotenv
 
-from agent_memory.config import MemoryConfig
-from agent_memory.formation import run_decay_sweep
-from agent_memory.storage.postgres import PostgresFactStore, create_pool
+from memory_verse_avneesh.config import MemoryConfig
+from memory_verse_avneesh.formation import run_decay_sweep
+from memory_verse_avneesh.storage.postgres import PostgresFactStore, create_pool
 
 load_dotenv()
 
