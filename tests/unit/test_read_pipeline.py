@@ -1,19 +1,44 @@
 from datetime import datetime, timedelta, timezone
 
-from memory_verse_avneesh.models import MemoryContext, MemoryFact, ScoredFact, Turn
+from memory_verse_avneesh.models import (
+    Episode,
+    ExpertIdentity,
+    MemoryContext,
+    MemoryFact,
+    PersonIdentity,
+    ScoredEpisode,
+    ScoredFact,
+    Turn,
+)
 from memory_verse_avneesh.read.pipeline import (
     read_memory,
     render_context_as_text,
     should_search_tier2,
 )
 
-from .fakes import FakeEmbeddingClient, FakeFactStore, FakeProfileCache, FakeSessionCache
+from .fakes import (
+    FakeEmbeddingClient,
+    FakeEpisodicStore,
+    FakeFactStore,
+    FakeIdentityStore,
+    FakeProfileCache,
+    FakeSessionCache,
+)
 
 
 def _fact(**overrides) -> MemoryFact:
     defaults = dict(user_id="u1", category="preference", value="likes concise answers", confidence=0.9)
     defaults.update(overrides)
     return MemoryFact(**defaults)
+
+
+def _episode(**overrides) -> Episode:
+    defaults = dict(
+        user_id="u1", conversation_id="c1",
+        user_message="what's a good subject line?", assistant_message="try 'Quick question'",
+    )
+    defaults.update(overrides)
+    return Episode(**defaults)
 
 
 async def test_read_memory_gathers_all_three_tiers():
@@ -194,3 +219,221 @@ async def test_render_context_as_text_omits_empty_sections():
     assert "RELEVANT MEMORY" not in text
     assert "RECENT CONVERSATION" not in text
     assert "first message ever" in text
+
+
+# --- identity ----------------------------------------------------------
+
+
+async def test_read_memory_without_identity_store_leaves_identity_fields_none():
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="a real question here",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+    )
+
+    assert context.person_identity is None
+    assert context.expert_identity is None
+
+
+async def test_read_memory_auto_fetches_person_identity_without_identity_id():
+    now = datetime.now(timezone.utc)
+    identity_store = FakeIdentityStore(
+        person_identities={
+            "u1": PersonIdentity(user_id="u1", content="prefers formal tone", created_at=now, updated_at=now)
+        }
+    )
+
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="a real question here",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        identity_store=identity_store,
+    )
+
+    assert context.person_identity == "prefers formal tone"
+    assert context.expert_identity is None
+
+
+async def test_read_memory_fetches_expert_identity_only_when_id_passed():
+    now = datetime.now(timezone.utc)
+    identity_store = FakeIdentityStore(
+        expert_identities={
+            "expert_email_writer": ExpertIdentity(
+                id="expert_email_writer", content="write concise, persuasive emails",
+                created_at=now, updated_at=now,
+            )
+        }
+    )
+
+    without_id = await read_memory(
+        user_id="u1", conversation_id="c1", message="a real question here",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        identity_store=identity_store,
+    )
+    assert without_id.expert_identity is None
+
+    with_id = await read_memory(
+        user_id="u1", conversation_id="c1", message="a real question here",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        identity_store=identity_store, identity_id="expert_email_writer",
+    )
+    assert with_id.expert_identity == "write concise, persuasive emails"
+
+
+async def test_read_memory_combines_person_and_expert_identity():
+    now = datetime.now(timezone.utc)
+    identity_store = FakeIdentityStore(
+        expert_identities={
+            "expert_email_writer": ExpertIdentity(
+                id="expert_email_writer", content="write concise, persuasive emails",
+                created_at=now, updated_at=now,
+            )
+        },
+        person_identities={
+            "u1": PersonIdentity(user_id="u1", content="prefers formal tone", created_at=now, updated_at=now)
+        },
+    )
+
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="a real question here",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        identity_store=identity_store, identity_id="expert_email_writer",
+    )
+
+    assert context.person_identity == "prefers formal tone"
+    assert context.expert_identity == "write concise, persuasive emails"
+
+
+async def test_render_context_as_text_includes_identity_sections():
+    context = MemoryContext(
+        profile=None, relevant_facts=[], recent_turns=[],
+        person_identity="prefers formal tone",
+        expert_identity="write concise, persuasive emails",
+    )
+
+    text = render_context_as_text(context, "draft an email")
+
+    assert "EXPERT IDENTITY:\nwrite concise, persuasive emails" in text
+    assert "PERSON IDENTITY:\nprefers formal tone" in text
+
+
+# --- episodic memory -----------------------------------------------------
+
+
+async def test_read_memory_without_episodic_store_returns_no_episodes():
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="a real question here",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+    )
+
+    assert context.relevant_episodes == []
+
+
+async def test_read_memory_searches_episodic_store_when_configured():
+    relevant_episode = _episode()
+    episodic_store = FakeEpisodicStore(
+        search_results=[ScoredEpisode(episode=relevant_episode, score=0.9)]
+    )
+
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="what's a good subject line?",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        episodic_store=episodic_store,
+    )
+
+    assert len(context.relevant_episodes) == 1
+    assert context.relevant_episodes[0].episode.id == relevant_episode.id
+
+
+async def test_read_memory_shares_one_embedding_call_across_facts_and_episodes():
+    fact_store = FakeFactStore(search_results=[ScoredFact(fact=_fact(), score=0.9)])
+    episodic_store = FakeEpisodicStore(
+        search_results=[ScoredEpisode(episode=_episode(), score=0.9)]
+    )
+    embedding_client = FakeEmbeddingClient()
+
+    await read_memory(
+        user_id="u1", conversation_id="c1", message="what's a good subject line?",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=fact_store, embedding_client=embedding_client,
+        episodic_store=episodic_store,
+    )
+
+    # one embedding call total, reused for both Tier 2 channels -- not two
+    assert embedding_client.embedded_texts == ["what's a good subject line?"]
+
+
+async def test_read_memory_skips_episodic_search_for_trivial_message():
+    episodic_store = FakeEpisodicStore(
+        search_results=[ScoredEpisode(episode=_episode(), score=0.99)]
+    )
+
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="thanks!",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        episodic_store=episodic_store,
+    )
+
+    assert context.relevant_episodes == []
+
+
+async def test_read_memory_episode_rerank_prefers_recent_over_raw_similarity():
+    now = datetime.now(timezone.utc)
+    stale_but_more_similar = _episode(
+        user_message="stale episode", created_at=now - timedelta(days=300)
+    )
+    fresh_but_less_similar = _episode(user_message="fresh episode", created_at=now)
+
+    episodic_store = FakeEpisodicStore(search_results=[
+        ScoredEpisode(episode=stale_but_more_similar, score=0.99),
+        ScoredEpisode(episode=fresh_but_less_similar, score=0.60),
+    ])
+
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="a real question here",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        episodic_store=episodic_store,
+    )
+
+    values = [se.episode.user_message for se in context.relevant_episodes]
+    assert values[0] == "fresh episode"
+    assert values[1] == "stale episode"
+
+
+async def test_read_memory_stops_packing_episodes_once_budget_exceeded():
+    big_episode = _episode(user_message="x" * 4000, assistant_message="")
+    small_episode = _episode(user_message="short", assistant_message="")
+
+    episodic_store = FakeEpisodicStore(search_results=[
+        ScoredEpisode(episode=big_episode, score=0.99),
+        ScoredEpisode(episode=small_episode, score=0.90),
+    ])
+
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="a real question here",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        episodic_store=episodic_store, episode_token_budget=300,
+    )
+
+    assert context.relevant_episodes == []
+
+
+async def test_render_context_as_text_includes_episode_section():
+    context = MemoryContext(
+        profile=None, relevant_facts=[], recent_turns=[],
+        relevant_episodes=[ScoredEpisode(episode=_episode(), score=0.9)],
+    )
+
+    text = render_context_as_text(context, "a new message")
+
+    assert "RELEVANT PAST CONVERSATIONS:" in text
+    assert "what's a good subject line?" in text
+    assert "try 'Quick question'" in text

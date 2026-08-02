@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from memory_verse_avneesh.formation.safety_gate import passes_safety_gate
 from memory_verse_avneesh.llm.interfaces import EmbeddingClient, ExtractionClient, ResolutionClient
 from memory_verse_avneesh.models import (
+    Episode,
     ExtractedCandidate,
     MemoryFact,
     MemoryOperation,
@@ -22,7 +23,7 @@ from memory_verse_avneesh.models import (
     ScoredFact,
     Turn,
 )
-from memory_verse_avneesh.storage.interfaces import FactStore
+from memory_verse_avneesh.storage.interfaces import EpisodicStore, FactStore
 
 MIN_COMMIT_CONFIDENCE = 0.75
 RESOLVE_SEARCH_LIMIT = 5
@@ -35,6 +36,7 @@ async def write_memory(
     resolution_client: ResolutionClient,
     embedding_client: EmbeddingClient,
     fact_store: FactStore,
+    episodic_store: EpisodicStore | None = None,
 ) -> list[MemoryFact]:
     """Extracts candidates from one turn and resolves each against existing
     memory before writing anything.
@@ -44,7 +46,28 @@ async def write_memory(
     then run the outcome through the deterministic safety gate — which can
     downgrade a commit to PROVISIONAL, or block a DELETE from touching an
     existing fact — regardless of what the resolution decided.
+
+    episodic_store is optional — omit it entirely if the host doesn't use
+    the episodic memory feature. When set, the turn is embedded and written
+    as an Episode unconditionally, independent of whatever fact extraction
+    below decides — episodic memory's value is completeness (an actual
+    record of what happened), not curation.
     """
+
+    if episodic_store is not None:
+        episode_embedding = await embedding_client.embed(
+            f"{turn.user_message}\n{turn.assistant_message}"
+        )
+        await episodic_store.add_episode(
+            Episode(
+                user_id=turn.user_id,
+                conversation_id=turn.conversation_id,
+                user_message=turn.user_message,
+                assistant_message=turn.assistant_message,
+                embedding=episode_embedding,
+                created_at=turn.created_at,
+            )
+        )
 
     candidates = await extraction_client.extract(turn)
 

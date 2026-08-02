@@ -9,7 +9,13 @@ from memory_verse_avneesh.models import (
     Turn,
 )
 
-from .fakes import FakeEmbeddingClient, FakeExtractionClient, FakeFactStore, FakeResolutionClient
+from .fakes import (
+    FakeEmbeddingClient,
+    FakeEpisodicStore,
+    FakeExtractionClient,
+    FakeFactStore,
+    FakeResolutionClient,
+)
 
 
 def _turn() -> Turn:
@@ -191,3 +197,61 @@ async def test_no_candidates_writes_nothing():
     )
     assert written == []
     assert fact_store.added == []
+
+
+# --- episodic memory -----------------------------------------------------
+
+
+async def test_write_memory_without_episodic_store_skips_episode_write():
+    fact_store = FakeFactStore()
+    await write_memory(
+        _turn(),
+        extraction_client=FakeExtractionClient([]),
+        resolution_client=FakeResolutionClient(),
+        embedding_client=FakeEmbeddingClient(),
+        fact_store=fact_store,
+    )
+    # nothing to assert on directly -- this just proves omitting
+    # episodic_store doesn't error, matching the optional/opt-in contract
+
+
+async def test_write_memory_writes_episode_unconditionally_even_with_no_candidates():
+    fact_store = FakeFactStore()
+    episodic_store = FakeEpisodicStore()
+    turn = _turn()
+
+    written = await write_memory(
+        turn,
+        extraction_client=FakeExtractionClient([]),  # no fact candidates at all
+        resolution_client=FakeResolutionClient(),
+        embedding_client=FakeEmbeddingClient(),
+        fact_store=fact_store,
+        episodic_store=episodic_store,
+    )
+
+    assert written == []  # no facts written
+    assert len(episodic_store.added) == 1  # episode still written -- completeness, not curation
+    episode = episodic_store.added[0]
+    assert episode.user_id == turn.user_id
+    assert episode.conversation_id == turn.conversation_id
+    assert episode.user_message == turn.user_message
+    assert episode.assistant_message == turn.assistant_message
+    assert episode.embedding is not None
+
+
+async def test_write_memory_embeds_combined_user_and_assistant_message_for_episode():
+    fact_store = FakeFactStore()
+    episodic_store = FakeEpisodicStore()
+    embedding_client = FakeEmbeddingClient()
+    turn = _turn()
+
+    await write_memory(
+        turn,
+        extraction_client=FakeExtractionClient([]),
+        resolution_client=FakeResolutionClient(),
+        embedding_client=embedding_client,
+        fact_store=fact_store,
+        episodic_store=episodic_store,
+    )
+
+    assert f"{turn.user_message}\n{turn.assistant_message}" in embedding_client.embedded_texts

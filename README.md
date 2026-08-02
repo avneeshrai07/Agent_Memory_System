@@ -75,6 +75,29 @@ separate subsystems:
 - **Keyword/BM25** over the same store, run in parallel with the other two — catches exact
   names/IDs that embeddings sometimes miss.
 
+**Episodic memory** is also separate from the Tier 2 table above — a durable, embedded record
+of every turn (`episodes` table), not just the distilled facts extracted from it. Written
+unconditionally by `write_memory()` for every turn, with no LLM judgment about what's "worth
+remembering" (that's what fact extraction already does; episodic memory's value is completeness
+— an actual answer to "what happened, when," not just "what do I know about the user"). Searched
+the same way as Tier 2 facts (embedding + ANN + rerank), sharing the same query embedding and
+retrieval gate, but reranked by relevance + recency only (no confidence/type weighting — an
+episode doesn't have those). Immutable except for explicit user-requested deletion; no decay,
+since it's the audit trail Tier 2 facts get distilled *from*, not a duplicate of Tier 2 itself.
+
+**Identity** is a separate concept from the tiers above, not a tier itself — two distinct
+Postgres tables, neither written by the formation pipeline:
+- **Expert identity**: host-authored personas ("expert_email_writer"), keyed by a string id the
+  host chooses, full CRUD via `memory_verse_avneesh.identity`. Selected explicitly per
+  `read_memory()` call via `identity_id` — never auto-selected.
+- **Person identity**: one durable record per `user_id`, distinct from the Tier 1 profile cache
+  (that's an ephemeral, formation-derived blob; this is a deliberate record the host writes),
+  always fetched automatically by `read_memory()` when an `IdentityStore` is configured.
+
+Both surface on `MemoryContext` as `expert_identity` / `person_identity` — combined together
+when both are present, e.g. an "expert email writer" persona applied with a specific person's
+own tone preferences layered on top.
+
 ## 4. Request-time workflow (read path)
 
 Steps 1–4 are the library's job (`read_memory()`) — cache, index, or arithmetic only,
@@ -91,9 +114,10 @@ built on what the library returns; the library does not do them.
    concurrently, never in a sequential loop.
 3. **Two-stage funnel**: fast approximate fetch (ANN top-20 via HNSW) → deterministic rerank:
    `score = w1·relevance + w2·recency_decay + w3·importance + w4·type_weight`.
-4. **Return structured context** (`MemoryContext`: profile + ranked facts + recent turns),
-   packed to a token budget. An optional convenience can flatten this to text, but the
-   structured form is the real contract — the library's responsibility ends here.
+4. **Return structured context** (`MemoryContext`: profile + ranked facts + recent turns +
+   ranked episodes + identity), packed to a token budget (facts and episodes have independent
+   budgets). An optional convenience can flatten this to text, but the structured form is the
+   real contract — the library's responsibility ends here.
 
 *— host-owned, outside the library —*
 
@@ -135,9 +159,12 @@ generation call — the library only ever sees a turn once both messages already
 
 ## 6. Storage
 
-- **Postgres**: `turns` (raw, append-only, source of truth) · `memory_facts` (Tier 2 vector
-  rows) · `memory_edges` (Tier 2 bi-temporal graph) · `reflections` (Tier 3) · `archival_*`
-  (cold copies). pgvector + HNSW index for vector search. Plain indexed edges table with
+- **Postgres**: `episodes` (raw, append-only, embedded, source of truth — episodic memory, see
+  Section 3) · `memory_facts` (Tier 2 vector rows) · `memory_edges` (Tier 2 bi-temporal graph) ·
+  `reflections` (Tier 3) · `archival_*` (cold copies) · `expert_identities` /
+  `person_identities` (identity, see Section 3) — all under one required, host-chosen schema
+  (`MemoryConfig.postgres_schema`), never a default `public`. pgvector + HNSW index for vector
+  search (used by both `memory_facts` and `episodes`). Plain indexed edges table with
   recursive CTEs for 1–2 hop graph queries — no separate graph database at this scale.
 - **Redis**: Tier 0 session cache, Tier 1 profile cache, durable job stream (Redis Streams)
   feeding the formation worker pool.

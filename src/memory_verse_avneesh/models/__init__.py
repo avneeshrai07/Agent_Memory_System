@@ -87,6 +87,63 @@ class ResolvedOperation(BaseModel):
     target_fact_id: UUID | None = None
 
 
+class Episode(BaseModel):
+    """One durable, embedded record of a past turn — episodic memory.
+    Distinct from Turn: Turn is Tier 0's ephemeral session-cache shape
+    (evicted once the session cache trims it); Episode is the durable,
+    similarity-searchable counterpart written by write_memory() for every
+    turn, unconditionally — no LLM judgment about what's "worth
+    remembering" the way fact extraction has, since completeness (an actual
+    audit trail of what happened, when) is the whole point. Immutable except
+    for explicit user-requested deletion — there is no edit_episode, since
+    rewriting history doesn't make sense for a record of what was actually
+    said.
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    user_id: str
+    conversation_id: str
+    user_message: str
+    assistant_message: str
+    embedding: list[float] | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ScoredEpisode(BaseModel):
+    """An Episode plus its retrieval score, returned by the read path."""
+
+    episode: Episode
+    score: float
+
+
+class ExpertIdentity(BaseModel):
+    """A host-authored persona ('expert email writer', etc.) — not learned by
+    the library. Content is a free-form instructions/tone/expertise block the
+    host writes and maintains directly via the identity management API.
+    Selected explicitly per read_memory() call via identity_id; never chosen
+    automatically.
+    """
+
+    id: str
+    content: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class PersonIdentity(BaseModel):
+    """The durable per-person counterpart to ExpertIdentity — one row per
+    user_id. Distinct from the Tier 1 ProfileCache: that's a fast/ephemeral
+    key-value cache rebuilt from facts, this is a deliberate, durable
+    Postgres-backed identity record maintained through the same management
+    API as ExpertIdentity (get/set/delete), not the formation pipeline.
+    """
+
+    user_id: str
+    content: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class MemoryContext(BaseModel):
     """Everything Tier 0/1/2 retrieval assembled for one incoming message.
 
@@ -100,3 +157,6 @@ class MemoryContext(BaseModel):
     profile: dict | None
     relevant_facts: list[ScoredFact]
     recent_turns: list[Turn]
+    relevant_episodes: list[ScoredEpisode] = []
+    person_identity: str | None = None
+    expert_identity: str | None = None

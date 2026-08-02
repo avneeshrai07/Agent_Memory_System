@@ -4,14 +4,18 @@ pipeline control flow without a real Postgres/Redis/Bedrock connection.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from memory_verse_avneesh.models import (
+    Episode,
+    ExpertIdentity,
     ExtractedCandidate,
     MemoryFact,
     MemoryStatus,
+    PersonIdentity,
     ResolvedOperation,
+    ScoredEpisode,
     ScoredFact,
     Turn,
 )
@@ -89,6 +93,86 @@ class FakeFactStore:
         ]
         eligible.sort(key=lambda f: f.last_reinforced_at)
         return eligible[:limit]
+
+
+class FakeEpisodicStore:
+    def __init__(self, search_results: list[ScoredEpisode] | None = None):
+        self._search_results = search_results or []
+        self._episodes: dict[UUID, Episode] = {}
+        self.added: list[Episode] = []
+
+    async def add_episode(self, episode: Episode) -> Episode:
+        self._episodes[episode.id] = episode
+        self.added.append(episode)
+        return episode
+
+    async def get_episode(self, episode_id: UUID) -> Episode | None:
+        return self._episodes.get(episode_id)
+
+    async def delete_episode(self, episode_id: UUID) -> None:
+        self._episodes.pop(episode_id, None)
+
+    async def search_episodes(
+        self, user_id: str, embedding: list[float], limit: int
+    ) -> list[ScoredEpisode]:
+        return self._search_results[:limit]
+
+    async def list_episodes(self, user_id: str, limit: int, offset: int) -> list[Episode]:
+        matching = [e for e in self._episodes.values() if e.user_id == user_id]
+        matching.sort(key=lambda e: e.created_at, reverse=True)
+        return matching[offset : offset + limit]
+
+
+class FakeIdentityStore:
+    def __init__(
+        self,
+        expert_identities: dict[str, ExpertIdentity] | None = None,
+        person_identities: dict[str, PersonIdentity] | None = None,
+    ):
+        self._expert = dict(expert_identities or {})
+        self._person = dict(person_identities or {})
+
+    async def create_expert_identity(self, identity: ExpertIdentity) -> ExpertIdentity:
+        self._expert[identity.id] = identity
+        return identity
+
+    async def get_expert_identity(self, identity_id: str) -> ExpertIdentity | None:
+        return self._expert.get(identity_id)
+
+    async def update_expert_identity(self, identity: ExpertIdentity) -> ExpertIdentity:
+        self._expert[identity.id] = identity
+        return identity
+
+    async def delete_expert_identity(self, identity_id: str) -> None:
+        self._expert.pop(identity_id, None)
+
+    async def list_expert_identities(self, limit: int, offset: int) -> list[ExpertIdentity]:
+        values = list(self._expert.values())
+        values.sort(key=lambda i: i.created_at, reverse=True)
+        return values[offset : offset + limit]
+
+    async def get_person_identity(self, user_id: str) -> PersonIdentity | None:
+        return self._person.get(user_id)
+
+    async def set_person_identity(self, user_id: str, content: str) -> PersonIdentity:
+        existing = self._person.get(user_id)
+        now = datetime.now(timezone.utc)
+        identity = PersonIdentity(
+            user_id=user_id,
+            content=content,
+            created_at=existing.created_at if existing else now,
+            updated_at=now,
+        )
+        self._person[user_id] = identity
+        return identity
+
+    async def delete_person_identity(self, user_id: str) -> None:
+        self._person.pop(user_id, None)
+
+    async def list_person_identities(self, limit: int, offset: int) -> list[PersonIdentity]:
+        values = list(self._person.values())
+        values.sort(key=lambda i: i.created_at, reverse=True)
+        return values[offset : offset + limit]
 
 
 class FakeEmbeddingClient:

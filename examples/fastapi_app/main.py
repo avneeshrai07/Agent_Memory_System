@@ -37,7 +37,18 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from memory_verse_avneesh.config import MemoryConfig
+from memory_verse_avneesh.episodic import EpisodeNotFoundError, delete_episode, get_episode, list_episodes
 from memory_verse_avneesh.formation import write_memory
+from memory_verse_avneesh.identity import (
+    IdentityNotFoundError,
+    create_expert_identity,
+    delete_expert_identity,
+    delete_person_identity,
+    get_expert_identity,
+    list_expert_identities,
+    set_person_identity,
+    update_expert_identity,
+)
 from memory_verse_avneesh.llm.bedrock import (
     BedrockEmbeddingClient,
     BedrockExtractionClient,
@@ -45,10 +56,15 @@ from memory_verse_avneesh.llm.bedrock import (
     create_bedrock_client,
 )
 from memory_verse_avneesh.management import MemoryNotFoundError, delete_memory, edit_memory, list_memories
-from memory_verse_avneesh.models import MemoryFact, Turn
+from memory_verse_avneesh.models import Episode, ExpertIdentity, MemoryFact, PersonIdentity, Turn
 from memory_verse_avneesh.read import read_memory, render_context_as_text
 from memory_verse_avneesh.storage.interfaces import ProfileCache, SessionCache
-from memory_verse_avneesh.storage.postgres import PostgresFactStore, create_pool
+from memory_verse_avneesh.storage.postgres import (
+    PostgresEpisodicStore,
+    PostgresFactStore,
+    PostgresIdentityStore,
+    create_pool,
+)
 from memory_verse_avneesh.storage.redis import (
     RedisProfileCache,
     RedisSessionCache,
@@ -74,6 +90,8 @@ CHAT_MODEL_ID = os.environ.get("CHAT_MODEL_ID", "amazon.nova-lite-v1:0")
 @dataclass
 class Backends:
     fact_store: PostgresFactStore
+    identity_store: PostgresIdentityStore
+    episodic_store: PostgresEpisodicStore
     session_cache: SessionCache
     profile_cache: ProfileCache
     embedding_client: BedrockEmbeddingClient
@@ -113,6 +131,14 @@ async def lifespan(app: FastAPI):
     )
     await fact_store.ensure_schema()
 
+    identity_store = PostgresIdentityStore(pg_pool, schema=config.postgres_schema)
+    await identity_store.ensure_schema()
+
+    episodic_store = PostgresEpisodicStore(
+        pg_pool, embedding_dim=config.embedding_dim, schema=config.postgres_schema
+    )
+    await episodic_store.ensure_schema()
+
     # Exactly one of these is set -- MemoryConfig.__post_init__ already
     # guarantees that, so no further validation needed here.
     if config.redis_url is not None:
@@ -135,6 +161,8 @@ async def lifespan(app: FastAPI):
 
     backends = Backends(
         fact_store=fact_store,
+        identity_store=identity_store,
+        episodic_store=episodic_store,
         session_cache=session_cache,
         profile_cache=profile_cache,
         embedding_client=BedrockEmbeddingClient(
@@ -166,6 +194,9 @@ class ChatRequest(BaseModel):
     user_id: str
     conversation_id: str
     message: str
+    # Which host-authored expert identity to use for this call, if any --
+    # explicit only, never auto-selected (README's identity section).
+    identity_id: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -185,6 +216,9 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         profile_cache=backends.profile_cache,
         fact_store=backends.fact_store,
         embedding_client=backends.embedding_client,
+        identity_store=backends.identity_store,
+        identity_id=request.identity_id,
+        episodic_store=backends.episodic_store,
     )
 
     # 2. Host: build the prompt however it wants. (render_context_as_text is
@@ -215,6 +249,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         resolution_client=backends.resolution_client,
         embedding_client=backends.embedding_client,
         fact_store=backends.fact_store,
+        episodic_store=backends.episodic_store,
     )
 
     return ChatResponse(response=response_text)
@@ -346,4 +381,107 @@ async def patch_user_memory(fact_id: UUID, request: EditMemoryRequest) -> Memory
 async def remove_user_memory(fact_id: UUID) -> dict:
     assert backends is not None
     await delete_memory(fact_id, fact_store=backends.fact_store)
+    return {"status": "deleted"}
+
+
+# --------------------------------------------------------------------------
+# Identity management. Two distinct, explicitly-managed concepts (README's
+# identity section) -- neither is written by the formation pipeline:
+#   - expert identities: host-authored personas, full CRUD, selected per
+#     /chat call via ChatRequest.identity_id.
+#   - person identity: one durable record per user_id, always included
+#     automatically once set -- no identity_id needed to fetch it.
+# --------------------------------------------------------------------------
+
+
+class ExpertIdentityRequest(BaseModel):
+    content: str
+
+
+@app.put("/identities/expert/{identity_id}", response_model=ExpertIdentity)
+async def upsert_expert_identity(
+    identity_id: str, request: ExpertIdentityRequest
+) -> ExpertIdentity:
+    assert backends is not None
+    try:
+        return await update_expert_identity(
+            identity_id, request.content, identity_store=backends.identity_store
+        )
+    except IdentityNotFoundError:
+        return await create_expert_identity(
+            identity_id, request.content, identity_store=backends.identity_store
+        )
+
+
+@app.get("/identities/expert/{identity_id}", response_model=ExpertIdentity)
+async def get_expert_identity_route(identity_id: str) -> ExpertIdentity:
+    assert backends is not None
+    try:
+        return await get_expert_identity(identity_id, identity_store=backends.identity_store)
+    except IdentityNotFoundError:
+        raise HTTPException(status_code=404, detail="expert identity not found")
+
+
+@app.get("/identities/expert", response_model=list[ExpertIdentity])
+async def list_expert_identities_route(limit: int = 50, offset: int = 0) -> list[ExpertIdentity]:
+    assert backends is not None
+    return await list_expert_identities(
+        identity_store=backends.identity_store, limit=limit, offset=offset
+    )
+
+
+@app.delete("/identities/expert/{identity_id}")
+async def remove_expert_identity(identity_id: str) -> dict:
+    assert backends is not None
+    await delete_expert_identity(identity_id, identity_store=backends.identity_store)
+    return {"status": "deleted"}
+
+
+class PersonIdentityRequest(BaseModel):
+    content: str
+
+
+@app.put("/identities/person/{user_id}", response_model=PersonIdentity)
+async def upsert_person_identity(user_id: str, request: PersonIdentityRequest) -> PersonIdentity:
+    assert backends is not None
+    return await set_person_identity(
+        user_id, request.content, identity_store=backends.identity_store
+    )
+
+
+@app.delete("/identities/person/{user_id}")
+async def remove_person_identity(user_id: str) -> dict:
+    assert backends is not None
+    await delete_person_identity(user_id, identity_store=backends.identity_store)
+    return {"status": "deleted"}
+
+
+# --------------------------------------------------------------------------
+# Episodic memory view/delete (README Section 7, extended to episodic
+# memory). No edit route -- an episode is a record of what was actually
+# said, not a fact that gets corrected as understanding improves.
+# --------------------------------------------------------------------------
+
+
+@app.get("/episodes/{user_id}", response_model=list[Episode])
+async def get_user_episodes(user_id: str, limit: int = 50, offset: int = 0) -> list[Episode]:
+    assert backends is not None
+    return await list_episodes(
+        user_id, episodic_store=backends.episodic_store, limit=limit, offset=offset
+    )
+
+
+@app.get("/episodes/detail/{episode_id}", response_model=Episode)
+async def get_episode_route(episode_id: UUID) -> Episode:
+    assert backends is not None
+    try:
+        return await get_episode(episode_id, episodic_store=backends.episodic_store)
+    except EpisodeNotFoundError:
+        raise HTTPException(status_code=404, detail="episode not found")
+
+
+@app.delete("/episodes/detail/{episode_id}")
+async def remove_episode(episode_id: UUID) -> dict:
+    assert backends is not None
+    await delete_episode(episode_id, episodic_store=backends.episodic_store)
     return {"status": "deleted"}
