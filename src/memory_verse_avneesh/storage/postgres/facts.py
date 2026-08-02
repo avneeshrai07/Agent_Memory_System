@@ -15,9 +15,13 @@ from memory_verse_avneesh.models import MemoryFact, MemoryStatus, ScoredFact
 
 
 class PostgresFactStore:
-    def __init__(
-        self, pool: asyncpg.Pool, embedding_dim: int, schema: str = "public"
-    ):
+    def __init__(self, pool: asyncpg.Pool, embedding_dim: int, schema: str):
+        """schema is required, deliberately no default. A silent "public"
+        default risks two unrelated apps sharing a database colliding on
+        the same memory_facts table without either one intending to share
+        data — fail at construction time, not with confusing cross-tenant
+        rows discovered later.
+        """
         self._pool = pool
         self._embedding_dim = embedding_dim
         self._schema = schema

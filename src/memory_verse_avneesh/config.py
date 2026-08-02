@@ -16,6 +16,10 @@ class MemoryConfig:
     """
 
     postgres_dsn: str
+    # No default, deliberately: see PostgresFactStore's own docstring on why
+    # a silent "public" default is a real cross-tenant-collision risk, not
+    # just a style preference.
+    postgres_schema: str
 
     # Tier 0/1 cache backend — exactly one of these two must be set:
     # standard Redis protocol (redis_url) or Upstash's REST API
@@ -68,6 +72,7 @@ class MemoryConfig:
     def from_env(cls) -> MemoryConfig:
         return cls(
             postgres_dsn=os.environ["POSTGRES_DSN"],
+            postgres_schema=os.environ["POSTGRES_SCHEMA"],
             redis_url=os.environ.get("REDIS_URL"),
             upstash_url=os.environ.get("UPSTASH_REDIS_REST_URL"),
             upstash_token=os.environ.get("UPSTASH_REDIS_REST_TOKEN"),

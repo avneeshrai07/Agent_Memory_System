@@ -108,7 +108,9 @@ async def lifespan(app: FastAPI):
         return
 
     pg_pool = await create_pool(config.postgres_dsn)
-    fact_store = PostgresFactStore(pg_pool, embedding_dim=config.embedding_dim)
+    fact_store = PostgresFactStore(
+        pg_pool, embedding_dim=config.embedding_dim, schema=config.postgres_schema
+    )
     await fact_store.ensure_schema()
 
     # Exactly one of these is set -- MemoryConfig.__post_init__ already
@@ -235,6 +237,12 @@ _CONFIG_REQUIREMENTS = [
         "key": "POSTGRES_DSN", "group": "postgres", "required": True,
         "description": "Postgres connection string. Must support the pgvector extension "
                         "(e.g. Neon, Supabase, or RDS with pgvector enabled).",
+    },
+    {
+        "key": "POSTGRES_SCHEMA", "group": "postgres", "required": True,
+        "description": "Schema the memory_facts table lives under. No default on purpose -- "
+                        "a silent 'public' default risks colliding with another app's tables "
+                        "in the same database.",
     },
     {
         "key": "REDIS_URL", "group": "cache_backend: standard_redis", "required": False,

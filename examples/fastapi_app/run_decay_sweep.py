@@ -25,7 +25,9 @@ load_dotenv()
 async def main() -> None:
     config = MemoryConfig.from_env()
     pool = await create_pool(config.postgres_dsn)
-    fact_store = PostgresFactStore(pool, embedding_dim=config.embedding_dim)
+    fact_store = PostgresFactStore(
+        pool, embedding_dim=config.embedding_dim, schema=config.postgres_schema
+    )
 
     archived = await run_decay_sweep(fact_store=fact_store)
     print(f"Decay sweep archived {archived} fact(s).")
