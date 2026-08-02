@@ -173,12 +173,21 @@ class PostgresFactStore:
     @staticmethod
     def _row_to_fact(row: asyncpg.Record) -> MemoryFact:
         embedding = row["embedding"]
+        if embedding is not None:
+            # pgvector's asyncpg decoder return type varies by pgvector-python
+            # version: <0.5 decodes to a numpy array (plain iterable), >=0.5
+            # decodes to a pgvector.Vector wrapper that isn't iterable at all
+            # and only exposes .to_list(). Handle both rather than pinning
+            # an exact version and hoping every install matches it.
+            embedding = (
+                embedding.to_list() if hasattr(embedding, "to_list") else list(embedding)
+            )
         return MemoryFact(
             id=row["id"],
             user_id=row["user_id"],
             category=row["category"],
             value=row["value"],
-            embedding=list(embedding) if embedding is not None else None,
+            embedding=embedding,
             confidence=row["confidence"],
             observation_count=row["observation_count"],
             status=MemoryStatus(row["status"]),
