@@ -40,6 +40,14 @@ from pydantic import BaseModel
 from memory_verse_avneesh.config import MemoryConfig
 from memory_verse_avneesh.episodic import EpisodeNotFoundError, delete_episode, get_episode, list_episodes
 from memory_verse_avneesh.formation import write_memory
+from memory_verse_avneesh.graph import (
+    EntityNotFoundError,
+    delete_edge,
+    delete_entity,
+    get_entity,
+    list_edges,
+    list_entities,
+)
 from memory_verse_avneesh.identity import (
     IdentityNotFoundError,
     create_expert_identity,
@@ -53,11 +61,21 @@ from memory_verse_avneesh.identity import (
 from memory_verse_avneesh.llm.bedrock import (
     BedrockEmbeddingClient,
     BedrockExtractionClient,
+    BedrockRelationExtractionClient,
     BedrockResolutionClient,
     create_bedrock_client,
 )
 from memory_verse_avneesh.management import MemoryNotFoundError, delete_memory, edit_memory, list_memories
-from memory_verse_avneesh.models import Episode, ExpertIdentity, MemoryFact, PersonIdentity, Reminder, Turn
+from memory_verse_avneesh.models import (
+    Edge,
+    Entity,
+    Episode,
+    ExpertIdentity,
+    MemoryFact,
+    PersonIdentity,
+    Reminder,
+    Turn,
+)
 from memory_verse_avneesh.prospective import (
     ReminderNotFoundError,
     create_reminder,
@@ -72,6 +90,7 @@ from memory_verse_avneesh.storage.interfaces import ProfileCache, SessionCache
 from memory_verse_avneesh.storage.postgres import (
     PostgresEpisodicStore,
     PostgresFactStore,
+    PostgresGraphStore,
     PostgresIdentityStore,
     PostgresReminderStore,
     create_pool,
@@ -104,11 +123,13 @@ class Backends:
     identity_store: PostgresIdentityStore
     episodic_store: PostgresEpisodicStore
     reminder_store: PostgresReminderStore
+    graph_store: PostgresGraphStore
     session_cache: SessionCache
     profile_cache: ProfileCache
     embedding_client: BedrockEmbeddingClient
     extraction_client: BedrockExtractionClient
     resolution_client: BedrockResolutionClient
+    relation_extraction_client: BedrockRelationExtractionClient
     bedrock_client: Any  # raw client — the host's own generate_response() uses this directly
 
 
@@ -137,7 +158,12 @@ async def lifespan(app: FastAPI):
         yield
         return
 
-    pg_pool = await create_pool(config.postgres_dsn)
+    pg_pool = await create_pool(
+        config.database_url,
+        host=config.postgres_host, port=config.postgres_port,
+        user=config.postgres_user, password=config.postgres_password,
+        database=config.postgres_database,
+    )
     fact_store = PostgresFactStore(
         pg_pool, embedding_dim=config.embedding_dim, schema=config.postgres_schema
     )
@@ -153,6 +179,11 @@ async def lifespan(app: FastAPI):
 
     reminder_store = PostgresReminderStore(pg_pool, schema=config.postgres_schema)
     await reminder_store.ensure_schema()
+
+    graph_store = PostgresGraphStore(
+        pg_pool, embedding_dim=config.embedding_dim, schema=config.postgres_schema
+    )
+    await graph_store.ensure_schema()
 
     # Exactly one of these is set -- MemoryConfig.__post_init__ already
     # guarantees that, so no further validation needed here.
@@ -170,8 +201,8 @@ async def lifespan(app: FastAPI):
 
     bedrock_client = create_bedrock_client(
         config.aws_region,
-        aws_access_key_id=config.aws_access_key_id,
-        aws_secret_access_key=config.aws_secret_access_key,
+        aws_access_key_id=config.aws_llm_access_key_id,
+        aws_secret_access_key=config.aws_llm_secret_access_key,
     )
 
     backends = Backends(
@@ -179,6 +210,7 @@ async def lifespan(app: FastAPI):
         identity_store=identity_store,
         episodic_store=episodic_store,
         reminder_store=reminder_store,
+        graph_store=graph_store,
         session_cache=session_cache,
         profile_cache=profile_cache,
         embedding_client=BedrockEmbeddingClient(
@@ -190,6 +222,9 @@ async def lifespan(app: FastAPI):
             bedrock_client, model_id=config.extraction_model_id
         ),
         resolution_client=BedrockResolutionClient(
+            bedrock_client, model_id=config.extraction_model_id
+        ),
+        relation_extraction_client=BedrockRelationExtractionClient(
             bedrock_client, model_id=config.extraction_model_id
         ),
         bedrock_client=bedrock_client,
@@ -236,6 +271,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         identity_id=request.identity_id,
         episodic_store=backends.episodic_store,
         reminder_store=backends.reminder_store,
+        graph_store=backends.graph_store,
     )
 
     # 2. Host: build the prompt however it wants. (render_context_as_text is
@@ -267,6 +303,8 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         embedding_client=backends.embedding_client,
         fact_store=backends.fact_store,
         episodic_store=backends.episodic_store,
+        graph_store=backends.graph_store,
+        relation_extraction_client=backends.relation_extraction_client,
     )
 
     return ChatResponse(response=response_text)
@@ -286,9 +324,11 @@ async def health() -> dict:
 
 _CONFIG_REQUIREMENTS = [
     {
-        "key": "POSTGRES_DSN", "group": "postgres", "required": True,
+        "key": "DATABASE_URL", "group": "postgres", "required": True,
         "description": "Postgres connection string. Must support the pgvector extension "
-                        "(e.g. Neon, Supabase, or RDS with pgvector enabled).",
+                        "(e.g. Neon, Supabase, or RDS with pgvector enabled). Alternatively, "
+                        "set POSTGRES_HOST/POSTGRES_PORT/POSTGRES_USER/POSTGRES_PASSWORD/"
+                        "POSTGRES_DATABASE instead of a single URL.",
     },
     {
         "key": "POSTGRES_SCHEMA", "group": "postgres", "required": True,
@@ -356,8 +396,9 @@ async def setup_memory() -> dict:
     return {
         "ready": ready,
         "error": error,
-        "note": "Set POSTGRES_DSN, plus exactly ONE cache backend group (standard_redis "
-                "OR upstash) -- everything else is optional with sensible defaults.",
+        "note": "Set DATABASE_URL (or the POSTGRES_HOST/PORT/USER/PASSWORD/DATABASE group), "
+                "plus exactly ONE cache backend group (standard_redis OR upstash) -- "
+                "everything else is optional with sensible defaults.",
         "requirements": requirements,
     }
 
@@ -566,4 +607,49 @@ async def get_reminder_route(reminder_id: UUID) -> Reminder:
 async def remove_reminder(reminder_id: UUID) -> dict:
     assert backends is not None
     await delete_reminder(reminder_id, reminder_store=backends.reminder_store)
+    return {"status": "deleted"}
+
+
+# --------------------------------------------------------------------------
+# Graph memory: entities and relationships. View/delete only -- entities and
+# edges are created by write_memory()'s relation extraction, not by the
+# host directly. No edge "edit" route: a changed relationship is a new edge
+# superseding the old one (the formation pipeline's own contradiction
+# handling), not a correction to an existing row.
+# --------------------------------------------------------------------------
+
+
+@app.get("/entities/{user_id}", response_model=list[Entity])
+async def get_user_entities(user_id: str, limit: int = 50, offset: int = 0) -> list[Entity]:
+    assert backends is not None
+    return await list_entities(user_id, graph_store=backends.graph_store, limit=limit, offset=offset)
+
+
+@app.get("/entities/detail/{entity_id}", response_model=Entity)
+async def get_entity_route(entity_id: UUID) -> Entity:
+    assert backends is not None
+    try:
+        return await get_entity(entity_id, graph_store=backends.graph_store)
+    except EntityNotFoundError:
+        raise HTTPException(status_code=404, detail="entity not found")
+
+
+@app.delete("/entities/detail/{entity_id}")
+async def remove_entity(entity_id: UUID) -> dict:
+    assert backends is not None
+    await delete_entity(entity_id, graph_store=backends.graph_store)
+    return {"status": "deleted"}
+
+
+@app.get("/entities/detail/{entity_id}/edges", response_model=list[Edge])
+async def get_entity_edges(entity_id: UUID, limit: int = 50, offset: int = 0) -> list[Edge]:
+    """Full history for this entity -- current and closed edges both."""
+    assert backends is not None
+    return await list_edges(entity_id, graph_store=backends.graph_store, limit=limit, offset=offset)
+
+
+@app.delete("/edges/detail/{edge_id}")
+async def remove_edge(edge_id: UUID) -> dict:
+    assert backends is not None
+    await delete_edge(edge_id, graph_store=backends.graph_store)
     return {"status": "deleted"}

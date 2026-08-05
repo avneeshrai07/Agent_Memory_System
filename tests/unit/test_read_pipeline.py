@@ -1,12 +1,15 @@
 from datetime import datetime, timedelta, timezone
 
 from memory_verse_avneesh.models import (
+    Edge,
+    Entity,
     Episode,
     ExpertIdentity,
     MemoryContext,
     MemoryFact,
     PersonIdentity,
     Reminder,
+    ScoredEdge,
     ScoredEpisode,
     ScoredFact,
     Turn,
@@ -21,6 +24,7 @@ from .fakes import (
     FakeEmbeddingClient,
     FakeEpisodicStore,
     FakeFactStore,
+    FakeGraphStore,
     FakeIdentityStore,
     FakeProfileCache,
     FakeReminderStore,
@@ -32,6 +36,22 @@ def _fact(**overrides) -> MemoryFact:
     defaults = dict(user_id="u1", category="preference", value="likes concise answers", confidence=0.9)
     defaults.update(overrides)
     return MemoryFact(**defaults)
+
+
+def _entity(**overrides) -> Entity:
+    defaults = dict(user_id="u1", name="David")
+    defaults.update(overrides)
+    return Entity(**defaults)
+
+
+def _edge(**overrides) -> Edge:
+    from uuid import uuid4
+    defaults = dict(
+        user_id="u1", source_entity_id=uuid4(), relation="managed_by",
+        target_value="David", fact_sentence="User is managed by David.", confidence=0.9,
+    )
+    defaults.update(overrides)
+    return Edge(**defaults)
 
 
 def _episode(**overrides) -> Episode:
@@ -506,3 +526,118 @@ async def test_render_context_as_text_includes_reminder_section():
 
     assert "DUE REMINDERS:" in text
     assert "follow up with the client" in text
+
+
+# --- graph memory ------------------------------------------------------
+
+
+async def test_read_memory_without_graph_store_returns_no_edges():
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="a real question here",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+    )
+
+    assert context.relevant_edges == []
+
+
+async def test_read_memory_searches_current_edges_when_configured():
+    matched_edge = _edge()
+    graph_store = FakeGraphStore(search_results=[ScoredEdge(edge=matched_edge, score=0.9)])
+
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="who do I report to?",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        graph_store=graph_store,
+    )
+
+    edge_ids = {se.edge.id for se in context.relevant_edges}
+    assert matched_edge.id in edge_ids
+
+
+async def test_read_memory_skips_edge_search_for_trivial_message():
+    graph_store = FakeGraphStore(search_results=[ScoredEdge(edge=_edge(), score=0.99)])
+
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="thanks!",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        graph_store=graph_store,
+    )
+
+    assert context.relevant_edges == []
+
+
+async def test_read_memory_expands_one_hop_from_matched_edge():
+    entity = _entity()
+    matched = _edge(source_entity_id=entity.id, relation="managed_by", target_value="David")
+    neighbor = _edge(
+        source_entity_id=entity.id, relation="has_role", target_value="senior engineer",
+        fact_sentence="User has role senior engineer.",
+    )
+
+    graph_store = FakeGraphStore(search_results=[ScoredEdge(edge=matched, score=0.9)])
+    await graph_store.add_edge(neighbor)  # not matched by search, but same source entity
+
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="who do I report to?",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        graph_store=graph_store,
+    )
+
+    edge_ids = {se.edge.id for se in context.relevant_edges}
+    assert matched.id in edge_ids
+    assert neighbor.id in edge_ids  # pulled in via one-hop expansion
+
+
+async def test_read_memory_one_hop_expansion_excludes_closed_edges():
+    entity = _entity()
+    matched = _edge(source_entity_id=entity.id, relation="managed_by", target_value="David")
+    closed_neighbor = _edge(
+        source_entity_id=entity.id, relation="has_role", target_value="engineer", valid_to=datetime.now(timezone.utc),
+    )
+
+    graph_store = FakeGraphStore(search_results=[ScoredEdge(edge=matched, score=0.9)])
+    await graph_store.add_edge(closed_neighbor)
+
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="who do I report to?",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        graph_store=graph_store,
+    )
+
+    edge_ids = {se.edge.id for se in context.relevant_edges}
+    assert closed_neighbor.id not in edge_ids
+
+
+async def test_read_memory_edge_rerank_prefers_direct_match_over_expansion():
+    entity = _entity()
+    matched = _edge(source_entity_id=entity.id, relation="managed_by", target_value="David")
+    neighbor = _edge(source_entity_id=entity.id, relation="has_role", target_value="engineer")
+
+    graph_store = FakeGraphStore(search_results=[ScoredEdge(edge=matched, score=0.95)])
+    await graph_store.add_edge(neighbor)
+
+    context = await read_memory(
+        user_id="u1", conversation_id="c1", message="who do I report to?",
+        session_cache=FakeSessionCache(), profile_cache=FakeProfileCache(),
+        fact_store=FakeFactStore(), embedding_client=FakeEmbeddingClient(),
+        graph_store=graph_store,
+    )
+
+    assert context.relevant_edges[0].edge.id == matched.id
+
+
+async def test_render_context_as_text_includes_relationship_section():
+    context = MemoryContext(
+        profile=None, relevant_facts=[], recent_turns=[],
+        relevant_edges=[ScoredEdge(edge=_edge(), score=0.9)],
+    )
+
+    text = render_context_as_text(context, "a new message")
+
+    assert "RELEVANT RELATIONSHIPS:" in text
+    assert "User is managed by David." in text

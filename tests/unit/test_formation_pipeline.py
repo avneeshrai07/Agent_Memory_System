@@ -1,9 +1,12 @@
+import pytest
+
 from memory_verse_avneesh.formation.pipeline import MIN_COMMIT_CONFIDENCE, write_memory
 from memory_verse_avneesh.formation.safety_gate import SAFETY_GATE_MIN_OBSERVATIONS
 from memory_verse_avneesh.models import (
     ExtractedCandidate,
     MemoryFact,
     MemoryStatus,
+    RelationCandidate,
     ResolvedOperation,
     ScoredFact,
     Turn,
@@ -14,6 +17,8 @@ from .fakes import (
     FakeEpisodicStore,
     FakeExtractionClient,
     FakeFactStore,
+    FakeGraphStore,
+    FakeRelationExtractionClient,
     FakeResolutionClient,
 )
 
@@ -255,3 +260,185 @@ async def test_write_memory_embeds_combined_user_and_assistant_message_for_episo
     )
 
     assert f"{turn.user_message}\n{turn.assistant_message}" in embedding_client.embedded_texts
+
+
+# --- graph memory ----------------------------------------------------------
+
+
+async def test_write_memory_requires_relation_extraction_client_with_graph_store():
+    with pytest.raises(ValueError):
+        await write_memory(
+            _turn(),
+            extraction_client=FakeExtractionClient([]),
+            resolution_client=FakeResolutionClient(),
+            embedding_client=FakeEmbeddingClient(),
+            fact_store=FakeFactStore(),
+            graph_store=FakeGraphStore(),
+            relation_extraction_client=None,
+        )
+
+
+async def test_write_memory_creates_entities_and_edge_for_new_relation():
+    graph_store = FakeGraphStore()
+    candidate = RelationCandidate(
+        source_name="user", relation="works_at", target_name="Acme Corp",
+        target_is_entity=True, confidence=0.95, explicit=True,
+    )
+
+    await write_memory(
+        _turn(),
+        extraction_client=FakeExtractionClient([]),
+        resolution_client=FakeResolutionClient(),
+        embedding_client=FakeEmbeddingClient(),
+        fact_store=FakeFactStore(),
+        graph_store=graph_store,
+        relation_extraction_client=FakeRelationExtractionClient([candidate]),
+    )
+
+    source = await graph_store.find_entity_by_name("u1", "user")
+    target = await graph_store.find_entity_by_name("u1", "Acme Corp")
+    assert source is not None and target is not None
+
+    edge = await graph_store.get_current_edge("u1", source.id, "works_at")
+    assert edge is not None
+    assert edge.target_entity_id == target.id
+    assert edge.fact_sentence == "User works at Acme Corp."
+
+
+async def test_write_memory_stores_literal_target_value_when_not_an_entity():
+    graph_store = FakeGraphStore()
+    candidate = RelationCandidate(
+        source_name="user", relation="has_role", target_name="senior engineer",
+        target_is_entity=False, confidence=0.9, explicit=True,
+    )
+
+    await write_memory(
+        _turn(),
+        extraction_client=FakeExtractionClient([]),
+        resolution_client=FakeResolutionClient(),
+        embedding_client=FakeEmbeddingClient(),
+        fact_store=FakeFactStore(),
+        graph_store=graph_store,
+        relation_extraction_client=FakeRelationExtractionClient([candidate]),
+    )
+
+    source = await graph_store.find_entity_by_name("u1", "user")
+    edge = await graph_store.get_current_edge("u1", source.id, "has_role")
+    assert edge.target_entity_id is None
+    assert edge.target_value == "senior engineer"
+
+
+async def test_write_memory_reuses_existing_entity_instead_of_duplicating():
+    graph_store = FakeGraphStore()
+    from memory_verse_avneesh.models import Entity
+
+    existing = Entity(user_id="u1", name="Acme Corp")
+    await graph_store.create_entity(existing)
+
+    candidate = RelationCandidate(
+        source_name="user", relation="works_at", target_name="Acme Corp",
+        target_is_entity=True, confidence=0.95, explicit=True,
+    )
+    await write_memory(
+        _turn(),
+        extraction_client=FakeExtractionClient([]),
+        resolution_client=FakeResolutionClient(),
+        embedding_client=FakeEmbeddingClient(),
+        fact_store=FakeFactStore(),
+        graph_store=graph_store,
+        relation_extraction_client=FakeRelationExtractionClient([candidate]),
+    )
+
+    all_entities = await graph_store.list_entities("u1", limit=50, offset=0)
+    acme_entities = [e for e in all_entities if e.name == "Acme Corp"]
+    assert len(acme_entities) == 1
+    assert acme_entities[0].id == existing.id
+
+
+async def test_write_memory_contradiction_closes_old_edge_and_opens_new_one():
+    graph_store = FakeGraphStore()
+
+    first = RelationCandidate(
+        source_name="user", relation="managed_by", target_name="Sarah",
+        target_is_entity=True, confidence=0.9, explicit=True,
+    )
+    await write_memory(
+        _turn(),
+        extraction_client=FakeExtractionClient([]),
+        resolution_client=FakeResolutionClient(),
+        embedding_client=FakeEmbeddingClient(),
+        fact_store=FakeFactStore(),
+        graph_store=graph_store,
+        relation_extraction_client=FakeRelationExtractionClient([first]),
+    )
+    source = await graph_store.find_entity_by_name("u1", "user")
+    old_edge = await graph_store.get_current_edge("u1", source.id, "managed_by")
+    assert old_edge is not None
+
+    second = RelationCandidate(
+        source_name="user", relation="managed_by", target_name="David",
+        target_is_entity=True, confidence=0.9, explicit=True,
+    )
+    await write_memory(
+        _turn(),
+        extraction_client=FakeExtractionClient([]),
+        resolution_client=FakeResolutionClient(),
+        embedding_client=FakeEmbeddingClient(),
+        fact_store=FakeFactStore(),
+        graph_store=graph_store,
+        relation_extraction_client=FakeRelationExtractionClient([second]),
+    )
+
+    # old edge closed, not deleted -- still fetchable directly
+    reloaded_old = await graph_store.get_edge(old_edge.id)
+    assert reloaded_old.valid_to is not None
+
+    new_current = await graph_store.get_current_edge("u1", source.id, "managed_by")
+    david = await graph_store.find_entity_by_name("u1", "David")
+    assert new_current.target_entity_id == david.id
+    assert new_current.id != old_edge.id
+
+
+async def test_write_memory_unchanged_relation_is_a_noop():
+    graph_store = FakeGraphStore()
+    candidate = RelationCandidate(
+        source_name="user", relation="works_at", target_name="Acme Corp",
+        target_is_entity=True, confidence=0.95, explicit=True,
+    )
+
+    for _ in range(2):
+        await write_memory(
+            _turn(),
+            extraction_client=FakeExtractionClient([]),
+            resolution_client=FakeResolutionClient(),
+            embedding_client=FakeEmbeddingClient(),
+            fact_store=FakeFactStore(),
+            graph_store=graph_store,
+            relation_extraction_client=FakeRelationExtractionClient([candidate]),
+        )
+
+    source = await graph_store.find_entity_by_name("u1", "user")
+    all_edges = await graph_store.list_edges_for_entity(source.id, limit=50, offset=0)
+    # still exactly one edge -- the second identical candidate didn't
+    # close-and-reopen, it recognized nothing had changed
+    assert len(all_edges) == 1
+
+
+async def test_write_memory_skips_low_confidence_inferred_relation():
+    graph_store = FakeGraphStore()
+    candidate = RelationCandidate(
+        source_name="user", relation="works_at", target_name="Acme Corp",
+        target_is_entity=True, confidence=MIN_COMMIT_CONFIDENCE - 0.1, explicit=False,
+    )
+
+    await write_memory(
+        _turn(),
+        extraction_client=FakeExtractionClient([]),
+        resolution_client=FakeResolutionClient(),
+        embedding_client=FakeEmbeddingClient(),
+        fact_store=FakeFactStore(),
+        graph_store=graph_store,
+        relation_extraction_client=FakeRelationExtractionClient([candidate]),
+    )
+
+    assert await graph_store.find_entity_by_name("u1", "Acme Corp") is None

@@ -10,11 +10,14 @@ from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from memory_verse_avneesh.models import (
+    Edge,
+    Entity,
     Episode,
     ExpertIdentity,
     MemoryFact,
     PersonIdentity,
     Reminder,
+    ScoredEdge,
     ScoredEpisode,
     ScoredFact,
     Turn,
@@ -141,6 +144,80 @@ class ReminderStore(Protocol):
     async def list_due_reminders(self, user_id: str, as_of: datetime) -> list[Reminder]:
         """PENDING reminders with due_at <= as_of — what read_memory() fetches
         automatically. Deterministic time comparison, no embedding, no LLM.
+        """
+        ...
+
+
+@runtime_checkable
+class GraphStore(Protocol):
+    """Entity/relationship (graph) memory — the bi-temporal edge half of
+    Tier 2 that the vector half (FactStore) doesn't cover. Entities are
+    resolved by exact case-insensitive name/alias match (no fuzzy/embedding
+    resolution in this version). Edges are treated as single-valued per
+    (source_entity_id, relation): a new edge for the same pair always
+    closes the current one first (README Section 3's contradiction
+    mechanic) — multi-valued relations (e.g. "friends_with" allowing many
+    concurrent targets) aren't modeled specially yet.
+    """
+
+    async def create_entity(self, entity: Entity) -> Entity: ...
+
+    async def get_entity(self, entity_id: UUID) -> Entity | None: ...
+
+    async def find_entity_by_name(self, user_id: str, name: str) -> Entity | None:
+        """Case-insensitive match against name or any alias — the entity
+        resolution step formation uses before creating a new Entity.
+        """
+        ...
+
+    async def delete_entity(self, entity_id: UUID) -> None:
+        """Idempotent. Also removes every edge referencing this entity as
+        source or target — an edge can't meaningfully outlive both its ends.
+        """
+        ...
+
+    async def list_entities(self, user_id: str, limit: int, offset: int) -> list[Entity]: ...
+
+    async def add_edge(self, edge: Edge) -> Edge: ...
+
+    async def get_edge(self, edge_id: UUID) -> Edge | None: ...
+
+    async def get_current_edge(
+        self, user_id: str, source_entity_id: UUID, relation: str
+    ) -> Edge | None:
+        """The edge with valid_to IS NULL for this (source, relation), if
+        any — the lookup formation uses to detect a contradiction.
+        """
+        ...
+
+    async def close_edge(self, edge_id: UUID, valid_to: datetime) -> Edge:
+        """Sets valid_to on an edge that's no longer current — never a
+        delete. Used both by formation's contradiction handling and by a
+        host's explicit correction.
+        """
+        ...
+
+    async def delete_edge(self, edge_id: UUID) -> None:
+        """Idempotent. Permanent removal — for user-requested deletion
+        (README Section 7), distinct from close_edge's supersession.
+        """
+        ...
+
+    async def search_current_edges(
+        self, user_id: str, embedding: list[float], limit: int
+    ) -> list[ScoredEdge]:
+        """ANN search over fact_sentence embeddings, filtered to
+        valid_to IS NULL (current truth only) — closed/historical edges
+        are never part of default read-path retrieval.
+        """
+        ...
+
+    async def list_edges_for_entity(
+        self, entity_id: UUID, limit: int, offset: int
+    ) -> list[Edge]:
+        """Every edge (current and closed) where this entity is source or
+        target, newest-first — full history for a host's user-facing view,
+        and also what the read path's 1-hop expansion uses.
         """
         ...
 

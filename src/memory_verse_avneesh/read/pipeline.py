@@ -15,19 +15,25 @@ Everything here is cache, index, or arithmetic — never an LLM call deciding
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 from datetime import datetime, timezone
 
+from uuid import UUID
+
 from memory_verse_avneesh.llm.interfaces import EmbeddingClient
-from memory_verse_avneesh.models import MemoryContext, Reminder, ScoredEpisode, ScoredFact
+from memory_verse_avneesh.models import MemoryContext, Reminder, ScoredEdge, ScoredEpisode, ScoredFact, Turn
 from memory_verse_avneesh.storage.interfaces import (
     EpisodicStore,
     FactStore,
+    GraphStore,
     IdentityStore,
     ProfileCache,
     ReminderStore,
     SessionCache,
 )
+
+logger = logging.getLogger(__name__)
 
 # --- retrieval gate ---------------------------------------------------------
 # Heuristic, not LLM (README Section 4, step 1). Gates only Tier 2 (the
@@ -165,14 +171,130 @@ def _pack_episodes_within_budget(
     return packed
 
 
+# --- graph memory -------------------------------------------------------
+# Same funnel again: gate -> ANN search over Edge.fact_sentence embeddings
+# (current edges only, valid_to IS NULL) -> deterministic rerank -> budget
+# pack. Additionally, a bounded one-hop expansion: for each directly
+# matched edge, also pull the other CURRENT edges touching its entities --
+# pure similarity search finds the right entry point but won't surface a
+# connected fact one hop away (README's "who does my manager manage"
+# example), and this is the simple, non-recursive version of that.
+
+DEFAULT_EDGE_RERANK_WEIGHTS = {
+    "relevance": 0.6,
+    "recency": 0.4,
+}
+DEFAULT_EDGE_TOKEN_BUDGET = 300
+DEFAULT_EDGE_LIMIT = 10
+EDGE_EXPANSION_LIMIT_PER_ENTITY = 3
+# Fixed base "relevance" for one-hop-expanded edges -- they weren't matched
+# by similarity at all, so they shouldn't be able to outrank a genuine
+# direct match; this just lets them compete on recency for the remaining
+# budget instead of being silently dropped.
+EDGE_EXPANSION_BASE_SCORE = 0.3
+
+
+def _rerank_edges(
+    scored_edges: list[ScoredEdge], *, now: datetime, weights: dict[str, float]
+) -> list[ScoredEdge]:
+    reranked = []
+    for se in scored_edges:
+        combined = (
+            weights["relevance"] * se.score
+            + weights["recency"] * _recency_decay(se.edge.observed_at, now)
+        )
+        reranked.append(ScoredEdge(edge=se.edge, score=combined))
+
+    reranked.sort(key=lambda se: se.score, reverse=True)
+    return reranked
+
+
+def _pack_edges_within_budget(scored_edges: list[ScoredEdge], budget: int) -> list[ScoredEdge]:
+    packed: list[ScoredEdge] = []
+    used = 0
+    for se in scored_edges:
+        cost = _approx_tokens(se.edge.fact_sentence)
+        if used + cost > budget:
+            break
+        packed.append(se)
+        used += cost
+    return packed
+
+
+async def _search_edges_with_embedding(
+    user_id: str,
+    query_embedding: list[float] | None,
+    graph_store: GraphStore | None,
+    edge_limit: int,
+) -> list[ScoredEdge]:
+    if query_embedding is None or graph_store is None:
+        return []
+    try:
+        results = await graph_store.search_current_edges(user_id, query_embedding, edge_limit)
+    except Exception:
+        logger.exception(
+            "read_memory: graph edge search failed for user_id=%s -- continuing "
+            "with no edges for this call", user_id,
+        )
+        return []
+    logger.info("read_memory: graph search -- edge_count=%d", len(results))
+    return results
+
+
+async def _expand_edges_one_hop(
+    matched: list[ScoredEdge], graph_store: GraphStore | None
+) -> list[ScoredEdge]:
+    if graph_store is None or not matched:
+        return []
+
+    seen_edge_ids = {se.edge.id for se in matched}
+    entity_ids: set[UUID] = set()
+    for se in matched:
+        entity_ids.add(se.edge.source_entity_id)
+        if se.edge.target_entity_id is not None:
+            entity_ids.add(se.edge.target_entity_id)
+
+    expanded: list[ScoredEdge] = []
+    for entity_id in entity_ids:
+        try:
+            neighbors = await graph_store.list_edges_for_entity(
+                entity_id, EDGE_EXPANSION_LIMIT_PER_ENTITY, 0
+            )
+        except Exception:
+            logger.exception(
+                "read_memory: one-hop expansion failed for entity_id=%s -- "
+                "skipping expansion around this entity, other matches unaffected",
+                entity_id,
+            )
+            continue
+        for edge in neighbors:
+            if edge.valid_to is not None or edge.id in seen_edge_ids:
+                continue
+            seen_edge_ids.add(edge.id)
+            expanded.append(ScoredEdge(edge=edge, score=EDGE_EXPANSION_BASE_SCORE))
+
+    logger.info("read_memory: graph one-hop expansion -- expanded_edge_count=%d", len(expanded))
+    return expanded
+
+
 async def _compute_query_embedding(
     message: str, embedding_client: EmbeddingClient
 ) -> list[float] | None:
     # Gated once here and reused for both Tier 2 channels below (README
     # Section 4, step 2) -- one embedding call, not one per channel.
     if not should_search_tier2(message):
+        logger.info("read_memory: retrieval gate skipped Tier 2 (trivial message)")
         return None
-    return await embedding_client.embed(message)
+    try:
+        embedding = await embedding_client.embed(message)
+    except Exception:
+        logger.exception(
+            "read_memory: query embedding call failed -- continuing with no Tier 2 "
+            "search this call (facts/episodes/edges will all be empty)"
+        )
+        return None
+    logger.info("read_memory: query embedding computed, dim=%d", len(embedding))
+    return embedding
 
 
 async def _search_facts_with_embedding(
@@ -180,7 +302,16 @@ async def _search_facts_with_embedding(
 ) -> list[ScoredFact]:
     if query_embedding is None:
         return []
-    return await fact_store.search_facts(user_id, query_embedding, fact_limit)
+    try:
+        results = await fact_store.search_facts(user_id, query_embedding, fact_limit)
+    except Exception:
+        logger.exception(
+            "read_memory: fact search failed for user_id=%s -- continuing with no "
+            "facts for this call", user_id,
+        )
+        return []
+    logger.info("read_memory: fact search -- fact_count=%d", len(results))
+    return results
 
 
 async def _search_episodes_with_embedding(
@@ -191,7 +322,44 @@ async def _search_episodes_with_embedding(
 ) -> list[ScoredEpisode]:
     if query_embedding is None or episodic_store is None:
         return []
-    return await episodic_store.search_episodes(user_id, query_embedding, episode_limit)
+    try:
+        results = await episodic_store.search_episodes(user_id, query_embedding, episode_limit)
+    except Exception:
+        logger.exception(
+            "read_memory: episode search failed for user_id=%s -- continuing with "
+            "no episodes for this call", user_id,
+        )
+        return []
+    logger.info("read_memory: episode search -- episode_count=%d", len(results))
+    return results
+
+
+async def _get_recent_turns_safe(
+    session_cache: SessionCache, conversation_id: str, limit: int
+) -> list[Turn]:
+    try:
+        turns = await session_cache.get_recent_turns(conversation_id, limit)
+    except Exception:
+        logger.exception(
+            "read_memory: Tier 0 session cache read failed for conversation_id=%s "
+            "-- continuing with no recent turns for this call", conversation_id,
+        )
+        return []
+    logger.info("read_memory: Tier 0 session cache -- recent_turn_count=%d", len(turns))
+    return turns
+
+
+async def _get_profile_safe(profile_cache: ProfileCache, user_id: str) -> dict | None:
+    try:
+        profile = await profile_cache.get_profile(user_id)
+    except Exception:
+        logger.exception(
+            "read_memory: Tier 1 profile cache read failed for user_id=%s -- "
+            "continuing with no profile for this call", user_id,
+        )
+        return None
+    logger.info("read_memory: Tier 1 profile cache -- present=%s", profile is not None)
+    return profile
 
 
 async def _get_person_identity_content(
@@ -199,8 +367,17 @@ async def _get_person_identity_content(
 ) -> str | None:
     if identity_store is None:
         return None
-    identity = await identity_store.get_person_identity(user_id)
-    return identity.content if identity else None
+    try:
+        identity = await identity_store.get_person_identity(user_id)
+    except Exception:
+        logger.exception(
+            "read_memory: person identity read failed for user_id=%s -- continuing "
+            "with no person identity for this call", user_id,
+        )
+        return None
+    content = identity.content if identity else None
+    logger.info("read_memory: person identity -- present=%s", content is not None)
+    return content
 
 
 async def _get_expert_identity_content(
@@ -208,8 +385,17 @@ async def _get_expert_identity_content(
 ) -> str | None:
     if identity_store is None or identity_id is None:
         return None
-    identity = await identity_store.get_expert_identity(identity_id)
-    return identity.content if identity else None
+    try:
+        identity = await identity_store.get_expert_identity(identity_id)
+    except Exception:
+        logger.exception(
+            "read_memory: expert identity read failed for identity_id=%s -- "
+            "continuing with no expert identity for this call", identity_id,
+        )
+        return None
+    content = identity.content if identity else None
+    logger.info("read_memory: expert identity -- identity_id=%s present=%s", identity_id, content is not None)
+    return content
 
 
 async def _get_due_reminders(
@@ -220,7 +406,16 @@ async def _get_due_reminders(
     # as person identity.
     if reminder_store is None:
         return []
-    return await reminder_store.list_due_reminders(user_id, now)
+    try:
+        due = await reminder_store.list_due_reminders(user_id, now)
+    except Exception:
+        logger.exception(
+            "read_memory: due-reminders read failed for user_id=%s -- continuing "
+            "with no reminders for this call", user_id,
+        )
+        return []
+    logger.info("read_memory: due reminders -- due_count=%d", len(due))
+    return due
 
 
 async def read_memory(
@@ -236,14 +431,18 @@ async def read_memory(
     identity_id: str | None = None,
     episodic_store: EpisodicStore | None = None,
     reminder_store: ReminderStore | None = None,
+    graph_store: GraphStore | None = None,
     recent_turns_limit: int = 5,
     fact_limit: int = 20,
     episode_limit: int = DEFAULT_EPISODE_LIMIT,
+    edge_limit: int = DEFAULT_EDGE_LIMIT,
     token_budget: int = DEFAULT_TOKEN_BUDGET,
     episode_token_budget: int = DEFAULT_EPISODE_TOKEN_BUDGET,
+    edge_token_budget: int = DEFAULT_EDGE_TOKEN_BUDGET,
     rerank_weights: dict[str, float] | None = None,
     type_weights: dict[str, float] | None = None,
     episode_rerank_weights: dict[str, float] | None = None,
+    edge_rerank_weights: dict[str, float] | None = None,
 ) -> MemoryContext:
     """Reads Tier 0/1/2 concurrently, reranks and budget-packs Tier 2, and
     returns the assembled MemoryContext. No LLM generation call happens here.
@@ -269,14 +468,26 @@ async def read_memory(
     due_at <= now are always included (a plain time comparison, not a
     similarity search) — no identity_id-style opt-in needed, since "is it
     due yet" has nothing to do with the current message's content.
+
+    graph_store is optional — omit it entirely if the host doesn't use the
+    graph memory feature. When set, it shares the same query embedding and
+    retrieval gate as fact/episode search, searching current-truth edges
+    (valid_to IS NULL) by their fact_sentence embedding, then expands one
+    hop out from whatever matched to pick up directly connected edges too.
     """
 
     now = datetime.now(timezone.utc)
+    logger.info(
+        "read_memory: start -- user_id=%s conversation_id=%s message=%r",
+        user_id, conversation_id, message,
+    )
 
     # Phase 1: Tier 0/1 reads, the (gated) query embedding, identity
     # lookups, and due reminders all fire concurrently -- the embedding
     # isn't awaited on its own beforehand, it's just one more concurrent
-    # task in this gather.
+    # task in this gather. Every coroutine in this gather catches its own
+    # exceptions internally (degrade gracefully, not fail the whole call) --
+    # see each helper's own try/except.
     (
         recent_turns,
         profile,
@@ -285,20 +496,25 @@ async def read_memory(
         expert_identity,
         due_reminders,
     ) = await asyncio.gather(
-        session_cache.get_recent_turns(conversation_id, recent_turns_limit),
-        profile_cache.get_profile(user_id),
+        _get_recent_turns_safe(session_cache, conversation_id, recent_turns_limit),
+        _get_profile_safe(profile_cache, user_id),
         _compute_query_embedding(message, embedding_client),
         _get_person_identity_content(user_id, identity_store),
         _get_expert_identity_content(identity_id, identity_store),
         _get_due_reminders(user_id, reminder_store, now),
     )
 
-    # Phase 2: both Tier 2 channels reuse that one embedding, fired
+    # Phase 2: all three Tier 2 channels reuse that one embedding, fired
     # concurrently with each other (README Section 4, step 2).
-    scored_facts, scored_episodes = await asyncio.gather(
+    scored_facts, scored_episodes, scored_edges = await asyncio.gather(
         _search_facts_with_embedding(user_id, query_embedding, fact_store, fact_limit),
         _search_episodes_with_embedding(user_id, query_embedding, episodic_store, episode_limit),
+        _search_edges_with_embedding(user_id, query_embedding, graph_store, edge_limit),
     )
+
+    # Phase 3: one-hop expansion depends on which edges matched in phase 2,
+    # so it can't join that gather -- it's the next sequential step.
+    expanded_edges = await _expand_edges_one_hop(scored_edges, graph_store)
 
     reranked = _rerank(
         scored_facts,
@@ -313,22 +529,47 @@ async def read_memory(
     )
     packed_episodes = _pack_episodes_within_budget(reranked_episodes, episode_token_budget)
 
-    return MemoryContext(
+    reranked_edges = _rerank_edges(
+        scored_edges + expanded_edges,
+        now=now,
+        weights=edge_rerank_weights or DEFAULT_EDGE_RERANK_WEIGHTS,
+    )
+    packed_edges = _pack_edges_within_budget(reranked_edges, edge_token_budget)
+
+    context = MemoryContext(
         profile=profile,
         relevant_facts=packed,
         recent_turns=recent_turns,
         relevant_episodes=packed_episodes,
+        relevant_edges=packed_edges,
         due_reminders=due_reminders,
         person_identity=person_identity,
         expert_identity=expert_identity,
     )
 
+    logger.info(
+        "read_memory: assembled context -- user_id=%s facts=%d episodes=%d "
+        "edges=%d due_reminders=%d person_identity=%s expert_identity=%s recent_turns=%d",
+        user_id, len(packed), len(packed_episodes), len(packed_edges), len(due_reminders),
+        person_identity is not None, expert_identity is not None, len(recent_turns),
+    )
+    # The prompt built from memory retrieval alone -- NOT the user's live
+    # message, which the host appends itself (see render_context_as_text).
+    # This is what got read from memory, independent of whatever the host
+    # ultimately does with it.
+    logger.info(
+        "read_memory: memory-derived prompt (read only, excludes the user's "
+        "message) for user_id=%s:\n%s", user_id, _render_memory_sections(context),
+    )
 
-def render_context_as_text(context: MemoryContext, message: str) -> str:
-    """Optional convenience: flattens a MemoryContext into a single text
-    block for host apps that want a drop-in string rather than building
-    their own prompt from the structured pieces. Entirely optional — the
-    structured MemoryContext is the real contract.
+    return context
+
+
+def _render_memory_sections(context: MemoryContext) -> str:
+    """The memory-derived portion of the prompt -- everything read_memory()
+    itself retrieved, with no user message mixed in. render_context_as_text()
+    below just appends the live message to this; read_memory() also logs
+    this on its own (read-only, from-memory prompt) once retrieval finishes.
     """
     sections: list[str] = []
 
@@ -361,6 +602,10 @@ def render_context_as_text(context: MemoryContext, message: str) -> str:
         )
         sections.append(f"RELEVANT PAST CONVERSATIONS:\n{episode_lines}")
 
+    if context.relevant_edges:
+        edge_lines = "\n".join(f"- {se.edge.fact_sentence}" for se in context.relevant_edges)
+        sections.append(f"RELEVANT RELATIONSHIPS:\n{edge_lines}")
+
     if context.recent_turns:
         history_lines = "\n".join(
             f"User: {t.user_message}\nAssistant: {t.assistant_message}"
@@ -368,6 +613,21 @@ def render_context_as_text(context: MemoryContext, message: str) -> str:
         )
         sections.append(f"RECENT CONVERSATION:\n{history_lines}")
 
-    sections.append(f"NEW MESSAGE:\n{message}")
-
     return "\n\n".join(sections)
+
+
+def render_context_as_text(context: MemoryContext, message: str) -> str:
+    """Optional convenience: flattens a MemoryContext into a single text
+    block for host apps that want a drop-in string rather than building
+    their own prompt from the structured pieces. Entirely optional — the
+    structured MemoryContext is the real contract. Memory-derived sections
+    come from _render_memory_sections(); the user's live message is appended
+    here, not in that shared helper (read_memory() logs the memory-only
+    portion on its own, before it ever sees this message).
+    """
+    memory_sections = _render_memory_sections(context)
+    new_message_section = f"NEW MESSAGE:\n{message}"
+
+    if not memory_sections:
+        return new_message_section
+    return f"{memory_sections}\n\n{new_message_section}"

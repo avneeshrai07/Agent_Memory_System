@@ -7,18 +7,37 @@ import os
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class MemoryConfig:
     """Config a host application builds once and uses to wire up the
     concrete Postgres/Redis(-or-Upstash)/Bedrock backends. The library
     itself never reads environment variables directly — only this class's
     from_env() does, and only because it's a convenience, not a requirement.
+
+    Most hosts won't build this directly — memory_verse_avneesh.connect()
+    takes the same fields and returns a fully wired Memory object (pool
+    created, every table's ensure_schema() called, every client
+    constructed) in one call. Build MemoryConfig by hand only for custom
+    wiring connect() doesn't cover.
     """
 
-    postgres_dsn: str
+    # Postgres: exactly one of these two shapes must be set — a single
+    # database_url, or the granular host/port/user/password/database
+    # fields (mirroring storage-verse-avneesh's own dsn-vs-host duality,
+    # for hosts that don't have a single connection string to hand).
+    database_url: str | None = None
+    postgres_host: str | None = None
+    postgres_port: int | None = None
+    postgres_user: str | None = None
+    postgres_password: str | None = None
+    postgres_database: str | None = None
+
     # No default, deliberately: see PostgresFactStore's own docstring on why
     # a silent "public" default is a real cross-tenant-collision risk, not
-    # just a style preference.
+    # just a style preference. Safe to require here despite coming after
+    # fields with defaults above -- kw_only=True on the whole dataclass
+    # (Python 3.11+) lifts the usual "no required field after a defaulted
+    # one" ordering rule, so this still raises a clear TypeError if omitted.
     postgres_schema: str
 
     # Tier 0/1 cache backend — exactly one of these two must be set:
@@ -37,14 +56,46 @@ class MemoryConfig:
     # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY names (which boto3's default
     # chain already discovers on its own). Leave unset to fall back to that
     # default chain — the common production pattern (instance/task role).
-    aws_access_key_id: str | None = None
-    aws_secret_access_key: str | None = None
+    # Named aws_llm_* (not the plain aws_* boto3 uses) to match the AWS_LLM_*
+    # env vars from_env() already read — credentials scoped to this
+    # library's own LLM calls, not whatever else in the process might read
+    # the standard AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY names.
+    aws_llm_access_key_id: str | None = None
+    aws_llm_secret_access_key: str | None = None
 
     embedding_dim: int = 1024
     embedding_model_id: str = "amazon.titan-embed-text-v2:0"
     extraction_model_id: str = "amazon.nova-lite-v1:0"
 
     def __post_init__(self) -> None:
+        has_database_url = self.database_url is not None
+        has_full_host_config = bool(
+            self.postgres_host and self.postgres_user
+            and self.postgres_password and self.postgres_database
+        )
+        has_partial_host_config = (
+            any([self.postgres_host, self.postgres_user, self.postgres_password, self.postgres_database])
+            and not has_full_host_config
+        )
+
+        if has_partial_host_config:
+            raise ValueError(
+                "MemoryConfig: postgres_host/postgres_user/postgres_password/"
+                "postgres_database must all be set together, or none of them — "
+                "got only some."
+            )
+        if has_database_url and has_full_host_config:
+            raise ValueError(
+                "MemoryConfig: both database_url and the postgres_host/user/"
+                "password/database fields are set — pick one way to configure "
+                "Postgres, not both."
+            )
+        if not has_database_url and not has_full_host_config:
+            raise ValueError(
+                "MemoryConfig: no Postgres connection configured — set database_url, "
+                "or postgres_host/postgres_user/postgres_password/postgres_database."
+            )
+
         has_redis = self.redis_url is not None
         has_upstash_url = self.upstash_url is not None
         has_upstash_token = self.upstash_token is not None
@@ -70,14 +121,23 @@ class MemoryConfig:
 
     @classmethod
     def from_env(cls) -> MemoryConfig:
+        database_url = os.environ.get("DATABASE_URL")
+        postgres_host = os.environ.get("POSTGRES_HOST")
+        postgres_port_raw = os.environ.get("POSTGRES_PORT")
+
         return cls(
-            postgres_dsn=os.environ["POSTGRES_DSN"],
+            database_url=database_url,
+            postgres_host=postgres_host,
+            postgres_port=int(postgres_port_raw) if postgres_port_raw else None,
+            postgres_user=os.environ.get("POSTGRES_USER"),
+            postgres_password=os.environ.get("POSTGRES_PASSWORD"),
+            postgres_database=os.environ.get("POSTGRES_DATABASE"),
             postgres_schema=os.environ["POSTGRES_SCHEMA"],
             redis_url=os.environ.get("REDIS_URL"),
             upstash_url=os.environ.get("UPSTASH_REDIS_REST_URL"),
             upstash_token=os.environ.get("UPSTASH_REDIS_REST_TOKEN"),
             aws_region=os.environ.get("AWS_REGION", "us-east-1"),
-            aws_access_key_id=os.environ.get("AWS_LLM_ACCESS_KEY_ID"),
-            aws_secret_access_key=os.environ.get("AWS_LLM_SECRET_ACCESS_KEY"),
+            aws_llm_access_key_id=os.environ.get("AWS_LLM_ACCESS_KEY_ID"),
+            aws_llm_secret_access_key=os.environ.get("AWS_LLM_SECRET_ACCESS_KEY"),
             embedding_dim=int(os.environ.get("MEMORY_VERSE_AVNEESH_EMBEDDING_DIM", "1024")),
         )

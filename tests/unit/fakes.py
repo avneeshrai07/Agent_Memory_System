@@ -8,15 +8,19 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from memory_verse_avneesh.models import (
+    Edge,
+    Entity,
     Episode,
     ExpertIdentity,
     ExtractedCandidate,
     MemoryFact,
     MemoryStatus,
     PersonIdentity,
+    RelationCandidate,
     Reminder,
     ReminderStatus,
     ResolvedOperation,
+    ScoredEdge,
     ScoredEpisode,
     ScoredFact,
     Turn,
@@ -210,6 +214,98 @@ class FakeReminderStore:
         ]
         due.sort(key=lambda r: r.due_at)
         return due
+
+
+class FakeGraphStore:
+    def __init__(self, search_results: list[ScoredEdge] | None = None):
+        self._search_results = search_results or []
+        self._entities: dict[UUID, Entity] = {}
+        self._edges: dict[UUID, Edge] = {}
+
+    async def create_entity(self, entity: Entity) -> Entity:
+        self._entities[entity.id] = entity
+        return entity
+
+    async def get_entity(self, entity_id: UUID) -> Entity | None:
+        return self._entities.get(entity_id)
+
+    async def find_entity_by_name(self, user_id: str, name: str) -> Entity | None:
+        normalized = name.strip().lower()
+        for entity in self._entities.values():
+            if entity.user_id != user_id:
+                continue
+            if entity.name.strip().lower() == normalized:
+                return entity
+            if any(a.strip().lower() == normalized for a in entity.aliases):
+                return entity
+        return None
+
+    async def delete_entity(self, entity_id: UUID) -> None:
+        self._entities.pop(entity_id, None)
+        for edge_id in [
+            eid
+            for eid, e in self._edges.items()
+            if e.source_entity_id == entity_id or e.target_entity_id == entity_id
+        ]:
+            self._edges.pop(edge_id, None)
+
+    async def list_entities(self, user_id: str, limit: int, offset: int) -> list[Entity]:
+        matching = [e for e in self._entities.values() if e.user_id == user_id]
+        matching.sort(key=lambda e: e.created_at, reverse=True)
+        return matching[offset : offset + limit]
+
+    async def add_edge(self, edge: Edge) -> Edge:
+        self._edges[edge.id] = edge
+        return edge
+
+    async def get_edge(self, edge_id: UUID) -> Edge | None:
+        return self._edges.get(edge_id)
+
+    async def get_current_edge(
+        self, user_id: str, source_entity_id: UUID, relation: str
+    ) -> Edge | None:
+        for edge in self._edges.values():
+            if (
+                edge.user_id == user_id
+                and edge.source_entity_id == source_entity_id
+                and edge.relation == relation
+                and edge.valid_to is None
+            ):
+                return edge
+        return None
+
+    async def close_edge(self, edge_id: UUID, valid_to: datetime) -> Edge:
+        edge = self._edges[edge_id]
+        closed = edge.model_copy(update={"valid_to": valid_to})
+        self._edges[edge_id] = closed
+        return closed
+
+    async def delete_edge(self, edge_id: UUID) -> None:
+        self._edges.pop(edge_id, None)
+
+    async def search_current_edges(
+        self, user_id: str, embedding: list[float], limit: int
+    ) -> list[ScoredEdge]:
+        return self._search_results[:limit]
+
+    async def list_edges_for_entity(
+        self, entity_id: UUID, limit: int, offset: int
+    ) -> list[Edge]:
+        matching = [
+            e
+            for e in self._edges.values()
+            if e.source_entity_id == entity_id or e.target_entity_id == entity_id
+        ]
+        matching.sort(key=lambda e: e.recorded_at, reverse=True)
+        return matching[offset : offset + limit]
+
+
+class FakeRelationExtractionClient:
+    def __init__(self, candidates: list[RelationCandidate] | None = None):
+        self._candidates = candidates or []
+
+    async def extract_relations(self, turn: Turn) -> list[RelationCandidate]:
+        return self._candidates
 
 
 class FakeEmbeddingClient:

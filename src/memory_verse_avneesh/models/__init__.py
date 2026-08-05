@@ -169,6 +169,81 @@ class Reminder(BaseModel):
     completed_at: datetime | None = None
 
 
+class Entity(BaseModel):
+    """A named thing (person/org/place/concept) a user's edges reference.
+    Resolved by exact case-insensitive name/alias match in this version —
+    no fuzzy/embedding-based entity resolution yet, deliberately, to keep
+    the first vertical slice simple. Created implicitly by write_memory()
+    when a relation candidate names something with no existing match.
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    user_id: str
+    name: str
+    entity_type: str | None = None
+    aliases: list[str] = []
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class Edge(BaseModel):
+    """A bi-temporal relationship between two entities, or between an
+    entity and a literal value (target_value) for attributes that aren't
+    themselves things worth tracking as an Entity — e.g. "has_role" ->
+    "senior engineer" doesn't need its own Entity row. Exactly one of
+    target_entity_id / target_value is set.
+
+    Contradictions never delete a row: a new edge for the same
+    (source_entity_id, relation) closes the prior current edge's valid_to
+    and inserts a fresh one. "Current truth" is valid_to IS NULL. Full
+    history is preserved for free — this is the actual bi-temporal
+    mechanic, not just a naming convention.
+
+    fact_sentence is a deterministically templated natural-language
+    rendering of the edge (e.g. "User works at Acme Corp"), NOT another LLM
+    call — its embedding is what the read path searches against, since
+    embedding a bare entity name matches conversational queries far worse
+    than embedding the full relationship as a sentence (this is how
+    Zep/Graphiti's graph retrieval works, and the precedent this design
+    follows).
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    user_id: str
+    source_entity_id: UUID
+    relation: str
+    target_entity_id: UUID | None = None
+    target_value: str | None = None
+    fact_sentence: str
+    embedding: list[float] | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    valid_from: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    valid_to: datetime | None = None
+    observed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    recorded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ScoredEdge(BaseModel):
+    """An Edge plus its retrieval score, returned by the read path."""
+
+    edge: Edge
+    score: float
+
+
+class RelationCandidate(BaseModel):
+    """Raw output of the formation path's relation-extraction step — not
+    yet an Edge. target_is_entity is decided by the extraction LLM itself
+    (it's the one with the judgment to tell "Acme Corp" the org apart from
+    "senior engineer" the role) rather than guessed heuristically in code.
+    """
+
+    source_name: str
+    relation: str
+    target_name: str
+    target_is_entity: bool
+    confidence: float = Field(ge=0.0, le=1.0)
+    explicit: bool
+
+
 class MemoryContext(BaseModel):
     """Everything Tier 0/1/2 retrieval assembled for one incoming message.
 
@@ -183,6 +258,7 @@ class MemoryContext(BaseModel):
     relevant_facts: list[ScoredFact]
     recent_turns: list[Turn]
     relevant_episodes: list[ScoredEpisode] = []
+    relevant_edges: list[ScoredEdge] = []
     due_reminders: list[Reminder] = []
     person_identity: str | None = None
     expert_identity: str | None = None

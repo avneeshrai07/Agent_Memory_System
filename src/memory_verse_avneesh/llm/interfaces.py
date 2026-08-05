@@ -8,7 +8,13 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from memory_verse_avneesh.models import ExtractedCandidate, ResolvedOperation, ScoredFact, Turn
+from memory_verse_avneesh.models import (
+    ExtractedCandidate,
+    RelationCandidate,
+    ResolvedOperation,
+    ScoredFact,
+    Turn,
+)
 
 
 @runtime_checkable
@@ -42,3 +48,17 @@ class ResolutionClient(Protocol):
     async def classify_operation(
         self, candidate: ExtractedCandidate, existing: list[ScoredFact]
     ) -> ResolvedOperation: ...
+
+
+@runtime_checkable
+class RelationExtractionClient(Protocol):
+    """Formation-path relation extraction (graph memory) — a distinct call
+    from ExtractionClient's flat-fact extraction, since the output shape and
+    prompting intent differ (relationships between entities, not standalone
+    facts). Runs off the critical path, on the same host-constructed Turn.
+    Edge resolution against existing edges is deterministic (same
+    source+relation contradiction check), unlike fact resolution — so there
+    is no equivalent of ResolutionClient here.
+    """
+
+    async def extract_relations(self, turn: Turn) -> list[RelationCandidate]: ...

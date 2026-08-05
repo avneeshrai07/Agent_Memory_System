@@ -24,7 +24,12 @@ load_dotenv()
 
 async def main() -> None:
     config = MemoryConfig.from_env()
-    pool = await create_pool(config.postgres_dsn)
+    pool = await create_pool(
+        config.database_url,
+        host=config.postgres_host, port=config.postgres_port,
+        user=config.postgres_user, password=config.postgres_password,
+        database=config.postgres_database,
+    )
     fact_store = PostgresFactStore(
         pool, embedding_dim=config.embedding_dim, schema=config.postgres_schema
     )

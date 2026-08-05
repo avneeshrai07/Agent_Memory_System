@@ -22,6 +22,58 @@ OS-inspired memory), and Stanford's **Generative Agents** (reflection / memory s
 
 ---
 
+## 0. Quick start
+
+The recommended way to start: `connect()` does all the wiring in one call — creates the
+Postgres pool, creates every table (facts, identity, episodic, reminders, graph) and ensures
+their schema, builds the Tier 0/1 cache backend, and constructs every LLM client. It hands back
+a single `Memory` object whose `.read()`/`.write()` already have every backend bound, so a
+request only needs to pass what's actually request-specific:
+
+```python
+from memory_verse_avneesh import connect
+
+memory = await connect(
+    database_url=DATABASE_URL,      # or postgres_host/port/user/password/database
+    postgres_schema="my_app",       # required, no default -- see Section 6
+    upstash_url=UPSTASH_URL,        # or redis_url
+    upstash_token=UPSTASH_TOKEN,
+    aws_region="us-east-1",
+    aws_llm_access_key_id=AWS_KEY,      # optional -- omit to use boto3's default credential chain
+    aws_llm_secret_access_key=AWS_SECRET,
+)
+
+# request path
+context = await memory.read(user_id=user_id, conversation_id=conversation_id, message=message)
+prompt = memory.render_prompt(context, message)
+response_text = ...  # your own generation call -- memory_verse_avneesh has no part in this
+
+# after generation completes
+turn = Turn(user_id=user_id, conversation_id=conversation_id,
+            user_message=message, assistant_message=response_text)
+await memory.session_cache.append_turn(turn)
+background_tasks.add_task(memory.write, turn)  # backgrounded, never blocks the response
+
+# on shutdown
+await memory.close()
+```
+
+LLM calls go straight to AWS Bedrock, and the Tier 0/1 cache goes straight to Redis or
+Upstash (whichever you configured) — no extra dependency beyond this library's own
+`postgres`/`redis`\|`upstash`/`bedrock` extras.
+
+Every underlying store/client is still a public attribute on `Memory` (`memory.fact_store`,
+`memory.identity_store`, `memory.episodic_store`, `memory.reminder_store`, `memory.graph_store`,
+`memory.session_cache`, `memory.profile_cache`, `memory.embedding_client`, ...) — reach for these
+directly when calling `memory_verse_avneesh.identity`/`episodic`/`prospective`/`graph`/
+`management`'s own functions, e.g. `create_expert_identity(..., identity_store=memory.identity_store)`.
+
+Building `MemoryConfig` and each backend by hand (see `examples/fastapi_app`) is still fully
+supported for hosts that need custom wiring `connect()` doesn't cover — a non-default pool
+size, a swapped-in LLM client implementation, or credentials that don't fit `connect()`'s
+flat argument list. Everything below this section documents that manual
+path and the architecture behind both.
+
 ## 1. Problem statement
 
 Given `(user_id, new_message)`, produce a response that reflects everything worth knowing
@@ -68,12 +120,24 @@ Tier 2 is deliberately one logical store with two representations of the same fa
 separate subsystems:
 - **Vector** (Mem0-style): flat facts + embeddings, for fuzzy semantic recall ("what did we
   discuss about pricing").
-- **Graph** (Zep-style): entities + relationships as **bi-temporal edges** —
+- **Graph** (Zep/Graphiti-style): entities + relationships as **bi-temporal edges** —
   `(source, relation, target, valid_from, valid_to, observed_at, recorded_at)`. Contradictions
   never delete a row: a new fact closes the old edge's `valid_to` and inserts a new edge.
-  "Current truth" is just `valid_to IS NULL`. Full history is preserved for free.
+  "Current truth" is just `valid_to IS NULL`. Full history is preserved for free. Edges are
+  retrieved by embedding a deterministically-templated **fact sentence** per edge (e.g. "User
+  works at Acme Corp"), not the bare entity names — matching Zep/Graphiti's precedent, since a
+  conversational query matches a full relationship sentence far better than a short name string.
+  Entity resolution is exact case-insensitive name/alias matching in this version (no
+  fuzzy/embedding-based resolution yet). Edges are treated as single-valued per
+  `(source_entity_id, relation)` — a new candidate for the same pair always supersedes the
+  current one; multi-valued relations (e.g. "friends_with" allowing several concurrent targets)
+  aren't modeled specially. One caveat worth naming: the relation string itself is chosen freely
+  by the extraction LLM call, not drawn from a fixed vocabulary — if it phrases the same
+  real-world relationship differently across distant turns (`"managed_by"` vs. `"has_manager"`),
+  contradiction detection (which matches on the literal relation string) won't catch it, and
+  parallel "current" edges can result instead of a clean supersession.
 - **Keyword/BM25** over the same store, run in parallel with the other two — catches exact
-  names/IDs that embeddings sometimes miss.
+  names/IDs that embeddings sometimes miss. Not yet built (see Section 8).
 
 **Episodic memory** is also separate from the Tier 2 table above — a durable, embedded record
 of every turn (`episodes` table), not just the distilled facts extracted from it. Written
@@ -126,10 +190,15 @@ built on what the library returns; the library does not do them.
 3. **Two-stage funnel**: fast approximate fetch (ANN top-20 via HNSW) → deterministic rerank:
    `score = w1·relevance + w2·recency_decay + w3·importance + w4·type_weight`.
 4. **Return structured context** (`MemoryContext`: profile + ranked facts + recent turns +
-   ranked episodes + identity + due reminders), packed to a token budget (facts and episodes
-   have independent budgets; due reminders aren't budget-packed, since they're a plain time
-   filter, not a ranked/truncated list). An optional convenience can flatten this to text, but
-   the structured form is the real contract — the library's responsibility ends here.
+   ranked episodes + ranked relationship edges + identity + due reminders), packed to a token
+   budget (facts, episodes, and edges each have independent budgets; due reminders aren't
+   budget-packed, since they're a plain time filter, not a ranked/truncated list). Edge
+   retrieval additionally does a bounded one-hop expansion: after matching edges by
+   fact-sentence similarity, it also pulls in other current edges touching the same entities,
+   so a direct match like "managed by David" can surface a connected fact like "works at Acme
+   Corp" one hop away — reranked alongside the direct matches, not treated as equally relevant.
+   An optional convenience can flatten this to text, but the structured form is the real
+   contract — the library's responsibility ends here.
 
 *— host-owned, outside the library —*
 
@@ -150,34 +219,55 @@ Consumes turn-completed events from the durable queue, one turn at a time, per u
 `Turn` was constructed by the host application (README Section 4, step 6) after its own
 generation call — the library only ever sees a turn once both messages already exist.
 
-1. **Extract**: one structured-output LLM call → typed candidates (fact / relation /
-   preference), each with a confidence score and an explicit-vs-inferred flag.
-2. **Resolve**: for each candidate, retrieve its top-k nearest existing memories (same
-   retrieval mechanism as the read path, reused).
-3. **Classify operation**: one LLM tool-call decides `ADD / UPDATE / DELETE / NOOP` against
-   those candidates (Mem0's mechanism).
+**Flat facts** (Tier 2 vector):
+1. **Extract**: one structured-output LLM call (`ExtractionClient`) → typed candidates, each
+   with a confidence score and an explicit-vs-inferred flag.
+2. **Resolve**: for each candidate, retrieve its top-k nearest existing facts (same retrieval
+   mechanism as the read path, reused).
+3. **Classify operation**: one LLM tool-call (`ResolutionClient`) decides
+   `ADD / UPDATE / DELETE / NOOP` against those candidates (Mem0's mechanism).
 4. **Safety gate** (deterministic, not LLM): identity- and constraint-class fields must
    additionally pass an explicit-statement-or-N-repetitions check regardless of step 3's
    decision. Prevents one bad extraction from silently overwriting who the user is.
-5. **Write**:
-   - Relational fact → bi-temporal edge (see Tier 2 above).
-   - Flat fact → vector row, with confidence + observation_count. Merge into an existing row
-     above 0.85 cosine similarity instead of inserting a duplicate.
-6. **Reflection** (batched — e.g. hourly per active user, never per-turn): cluster recent
-   writes, synthesize a Tier 3 summary where a pattern has emerged across ≥N observations.
-7. **Decay sweep** (batched — e.g. daily): old, unreinforced, unretrieved Tier 2 rows move to
-   Archival. This keeps the active HNSW index small, which is what keeps step 3 of the read
-   path fast as the system ages — decay and speed are the same mechanism.
+5. **Write**: vector row, with confidence + observation_count. Merge into an existing row
+   above 0.85 cosine similarity instead of inserting a duplicate.
+
+**Relationships** (Tier 2 graph) — a separate pipeline, not a branch of the one above:
+1. **Extract**: one structured-output LLM call (`RelationExtractionClient`) → `(source,
+   relation, target, target_is_entity, confidence, explicit)` candidates.
+2. **Resolve entities**: exact case-insensitive name/alias match against existing entities for
+   this user, creating a new `Entity` if nothing matches — no LLM call.
+3. **Resolve edge** (deterministic, not LLM): does a current edge already exist for this
+   `(source_entity_id, relation)`? If its target differs, close it (`valid_to = now`) and open
+   a new one. If it matches, just leave it — no-op. If none exists, open a fresh one. Gated by
+   the same explicit-or-`MIN_COMMIT_CONFIDENCE` check as flat facts' safety gate, applied
+   inline rather than via the full safety_gate.py machinery (edges don't have a
+   category/observation-count shape to gate on).
+4. **Write**: the new edge's `fact_sentence` (see Tier 2 above) is embedded and stored.
+
+Both pipelines run for every turn when configured, independent of each other.
+
+**Batched, across both pipelines:**
+6. **Reflection** (e.g. hourly per active user, never per-turn): cluster recent writes,
+   synthesize a Tier 3 summary where a pattern has emerged across ≥N observations.
+7. **Decay sweep** (e.g. daily): old, unreinforced, unretrieved Tier 2 vector rows move to
+   Archival. This keeps the active HNSW index small, which is what keeps read-path search fast
+   as the system ages — decay and speed are the same mechanism. Graph edges are not decayed:
+   closed edges (`valid_to IS NOT NULL`) are permanent history, not a duplicate of the vector
+   store to prune.
 
 ## 6. Storage
 
 - **Postgres**: `episodes` (raw, append-only, embedded, source of truth — episodic memory, see
-  Section 3) · `memory_facts` (Tier 2 vector rows) · `memory_edges` (Tier 2 bi-temporal graph) ·
-  `reflections` (Tier 3) · `archival_*` (cold copies) · `expert_identities` /
-  `person_identities` (identity, see Section 3) · `reminders` (prospective memory, see Section
-  3 — no embedding column, indexed on `(user_id, status, due_at)` for the due-reminders lookup)
-  — all under one required, host-chosen schema (`MemoryConfig.postgres_schema`), never a default
-  `public`. pgvector + HNSW index for vector search (used by both `memory_facts` and `episodes`).
+  Section 3) · `memory_facts` (Tier 2 vector rows) · `entities` / `memory_edges` (Tier 2
+  bi-temporal graph, see Section 3 — `memory_edges.embedding` is the per-edge fact-sentence
+  vector, indexed for both similarity search and, via a partial index, fast `valid_to IS NULL`
+  current-truth lookups) · `reflections` (Tier 3) · `archival_*` (cold copies) ·
+  `expert_identities` / `person_identities` (identity, see Section 3) · `reminders`
+  (prospective memory, see Section 3 — no embedding column, indexed on
+  `(user_id, status, due_at)` for the due-reminders lookup) — all under one required,
+  host-chosen schema (`MemoryConfig.postgres_schema`), never a default `public`. pgvector +
+  HNSW index for vector search (used by `memory_facts`, `episodes`, and `memory_edges`).
   Plain indexed edges table with
   recursive CTEs for 1–2 hop graph queries — no separate graph database at this scale.
 - **Redis**: Tier 0 session cache, Tier 1 profile cache, durable job stream (Redis Streams)
@@ -190,10 +280,27 @@ generation call — the library only ever sees a turn once both messages already
 - **User-facing visibility/control**: view, edit, delete stored memories. Both ChatGPT and
   Claude treat this as core product surface, not an afterthought — it also doubles as the
   primary debugging tool during development.
-- **Observability**: structured logs (not `print`) and a full memory-operation audit trail —
-  every ADD/UPDATE/DELETE/NOOP and every edge invalidation logged with its reasoning. This is
-  the only way to see the system's judgment after the fact, since none of it is visible in the
-  final response.
+- **Observability**: `logging.getLogger("memory_verse_avneesh.read")` /
+  `.formation` — no `print`, ever. `read_memory()` logs what it retrieved from every tier/store
+  it queried (Tier 0/1, facts, episodes, edges, identity, due reminders) plus, once retrieval
+  finishes, the assembled memory-derived prompt on its own — the read-only portion, before the
+  host's live message is appended (see `render_context_as_text`). `write_memory()` logs every
+  ADD/UPDATE/DELETE/NOOP, episode write, and edge write/closure with its reasoning. This is the
+  only way to see the system's judgment after the fact, since none of it is visible in the final
+  response. Configure handlers/level the standard `logging` way — the library attaches none of
+  its own.
+- **Resilience**: a single backend failing never takes down the whole call.
+  `read_memory()` degrades gracefully — each tier/store is retrieved independently, any
+  exception is logged in full (`logger.exception`, with traceback) and that piece comes back
+  empty rather than raising; the rest of the context is unaffected.
+  `write_memory()` is best-effort with per-store *and* per-candidate isolation — one store
+  failing (or one bad candidate within a store) doesn't stop the others, each is wrapped and
+  logged independently. The one exception: `write_memory()`'s `ValueError` for a caller-contract
+  violation (e.g. `graph_store` passed without `relation_extraction_client`) still raises
+  immediately — that's a programming error to fix, not a backend failure to degrade around.
+- **No implicit credentials**: the library never reads credentials from the environment inside
+  its own core code paths — only `MemoryConfig.from_env()` does, and only because a host
+  explicitly opted into that convenience by calling it.
 - **Per-user isolation**: all storage and queue partitioning keyed by `user_id`, so one user's
   write load never contends with another's reads.
 
@@ -203,7 +310,9 @@ Do not build all tiers at once. Per production precedent (Mem0/Zep's own staged 
 
 **Phase 1 (MVP)**
 - Tier 0 (session cache) + Tier 1 (core profile)
-- Tier 2, vector half only (flat facts + embeddings, no graph yet)
+- Tier 2, vector half (flat facts + embeddings)
+- Tier 2, graph half (entities + bi-temporal edges, fact-sentence embedding retrieval)
+- Identity, episodic, and prospective memory
 - Formation pipeline: extract → resolve → ADD/UPDATE/DELETE/NOOP → safety gate
 - Basic decay sweep
 - User-facing memory view/edit/delete
@@ -211,9 +320,10 @@ Do not build all tiers at once. Per production precedent (Mem0/Zep's own staged 
 This alone should deliver the large majority of the latency and accuracy win.
 
 **Phase 2**
-- Tier 2 graph half (bi-temporal edges) + keyword/BM25 channel
+- Keyword/BM25 channel alongside the vector and graph channels
 - Tier 3 reflections
 - Full observability/audit trail
+- Fuzzy/embedding-based entity resolution (currently exact name/alias match only)
 
 Graduate to Phase 2 only once real usage data from Phase 1 shows where flat-vector retrieval
 is actually falling short — not speculatively upfront.
